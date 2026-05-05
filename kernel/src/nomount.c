@@ -76,10 +76,10 @@ static inline void nomount_bloom_del_path(const char *name)
 static inline bool nomount_bloom_test_path(const char *name)
 {
     size_t len = strlen(name);
-    if (likely(!nomount_bloom_paths)) return false;
     u32 hash = jhash(name, len, 0); 
     u32 h1 = hash & (NOMOUNT_BLOOM_SIZE - 1);
     u32 h2 = (hash >> 16 | hash << 16) & (NOMOUNT_BLOOM_SIZE - 1);
+    if (unlikely(!nomount_bloom_paths)) return false;
 
     return (nomount_bloom_paths[h1] > 0) && (nomount_bloom_paths[h2] > 0);
 }
@@ -124,13 +124,11 @@ static inline bool nomount_bloom_test_ino(unsigned long ino)
 bool nomount_is_uid_blocked(uid_t uid);
 
 /**
- * nomount_should_skip - Determine if the current context should bypass hooks
+ * __nomount_should_skip - Determine if the current context should bypass hooks
  *
  * Returns true if NoMount is disabled, if running in interrupt context,
  * if recursion is detected, or if the current UID is in the blocklist.
  */
-
-/* Internal */
 static __always_inline bool __nomount_should_skip(void) {
     if (unlikely(nomount_disabled())) return true;
     if (unlikely(in_interrupt() || in_nmi() || oops_in_progress)) return true;
@@ -141,12 +139,6 @@ static __always_inline bool __nomount_should_skip(void) {
     }
     return false;
 }
-
-/* Exported */
-bool nomount_should_skip(void) {
-    return __nomount_should_skip();
-}
-EXPORT_SYMBOL(nomount_should_skip);
 
 /**
  * nomount_is_uid_blocked - Check if a specific UID is excluded from redirection
@@ -191,7 +183,8 @@ static inline bool __nomount_is_injected_file_rcu(unsigned long ino) {
 }
 
 /**
- * __nomount_is_traversal_allowed_rcu - Check if an inode number corresponds to a directory with traversal permissions
+ * __nomount_is_traversal_allowed_rcu - Check if an inode number corresponds to a 
+ * directory with traversal permissions
  * @ino: The inode number to check
  *
  * This function checks if the given inode number is registered as a directory that allows traversal.
@@ -207,27 +200,6 @@ static inline bool __nomount_is_traversal_allowed_rcu(unsigned long ino) {
     return false;
 }
 
-/* Exported Wrappers */
-bool nomount_is_injected_file(struct inode *inode) {
-    bool found;
-    if (unlikely(!inode || IS_ERR_OR_NULL(inode) || nomount_num_rules() == 0)) return false;
-    rcu_read_lock();
-    found = __nomount_is_injected_file_rcu(inode->i_ino);
-    rcu_read_unlock();
-    return found;
-}
-
-bool nomount_is_traversal_allowed(struct inode *inode, int mask) {
-    bool found;
-    if (!inode || IS_ERR_OR_NULL(inode) || unlikely(nomount_num_dirs() == 0)) return false;
-    rcu_read_lock();
-    found = __nomount_is_injected_file_rcu(inode->i_ino) || 
-            __nomount_is_traversal_allowed_rcu(inode->i_ino);
-    rcu_read_unlock();
-    return found;
-}
-EXPORT_SYMBOL(nomount_is_traversal_allowed);
-
 /*** Helpers & Path Resolution ***/
 
 /**
@@ -242,7 +214,7 @@ EXPORT_SYMBOL(nomount_is_traversal_allowed);
  */
 static void __nomount_collect_parents(const char *real_path)
 {
-    char *path_tmp, *p;
+    char *path_tmp, *p, *slash;
     struct path kp;
     struct nomount_dir_node *dir_node;
     struct inode *p_inode;
@@ -257,7 +229,7 @@ static void __nomount_collect_parents(const char *real_path)
 
     p = path_tmp;
     while (1) {
-        char *slash = strrchr(p, '/');
+        slash = strrchr(p, '/');
         if (!slash || slash == p)
             break;
 
@@ -319,7 +291,7 @@ static void __nomount_collect_parents(const char *real_path)
  */
 char *nomount_build_absolute_path(int dfd, const char *name)
 {
-    char *page_buf, *dir_path, *abs_path = NULL;
+    char *page_buf, *dir_path;
     size_t dir_len, name_len;
     struct fd f;
 
@@ -380,7 +352,6 @@ static char *nomount_build_path_from_pwd(const char *rel_name)
     struct path pwd;
     char *cwd_str;
     char *page_buf = __getname();
-    char *abs_path = NULL;
     size_t dir_len, name_len;
 
     if (!page_buf) return NULL;
@@ -590,6 +561,7 @@ bool nomount_handle_faccessat(int dfd, const char __user *filename, int mode, un
     char *nm_abs, *slash, *rp_copy = NULL;
     const char *check_name;
     struct path path;
+    bool is_absolute;
     int res;
 
     if (__nomount_should_skip() || !filename)
@@ -612,7 +584,7 @@ bool nomount_handle_faccessat(int dfd, const char __user *filename, int mode, un
         return false;
     }
 
-    bool is_absolute = (tmp_name->name[0] == '/');
+    is_absolute = (tmp_name->name[0] == '/');
     nm_abs = nomount_build_absolute_path(dfd, tmp_name->name);
     putname(tmp_name);
 
@@ -624,8 +596,8 @@ bool nomount_handle_faccessat(int dfd, const char __user *filename, int mode, un
             
             rcu_read_lock();
             list_for_each_entry_rcu(priv_dir, &nomount_private_dirs_list, private_list) {
-                if (nm_abs[1] != priv_dir->dir_path[1]) continue;
                 size_t len = priv_dir->dir_path_len;
+                if (nm_abs[1] != priv_dir->dir_path[1]) continue;
                 if (strncmp(nm_abs, priv_dir->dir_path, len) == 0) {
                     char next = nm_abs[len];
                     if (next == '\0' || next == '/') {
@@ -704,8 +676,8 @@ struct filename *nomount_getname_hook(struct filename *name)
 
         rcu_read_lock();
         list_for_each_entry_rcu(priv_dir, &nomount_private_dirs_list, private_list) {
-            if (name->name[1] != priv_dir->dir_path[1]) continue;
             size_t len = priv_dir->dir_path_len;
+            if (name->name[1] != priv_dir->dir_path[1]) continue;
             if (strncmp(name->name, priv_dir->dir_path, len) == 0) {
                 char next = name->name[len];
                 if (next == '\0' || next == '/') {
@@ -1267,7 +1239,7 @@ static int nomount_ioctl_del_rule(unsigned long arg)
     struct nomount_dir_node *dir;
     struct nomount_child_name *child, *tmp_child, *victim_child = NULL;
     struct hlist_node *tmp;
-    char *v_path;
+    char *v_path, *slash;
     size_t v_len;
     u32 hash;
     int bkt;
@@ -1295,7 +1267,7 @@ static int nomount_ioctl_del_rule(unsigned long arg)
             nomount_bloom_del_path(rule->virtual_path);
             if (rule->real_path) nomount_bloom_del_path(rule->real_path);
             
-            char *slash = strrchr(rule->virtual_path, '/');
+            slash = strrchr(rule->virtual_path, '/');
             if (slash && *(slash + 1) != '\0') {
                 nomount_bloom_del_path(slash + 1);
             }

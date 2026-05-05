@@ -65,7 +65,6 @@ diff --git a/fs/namei.c b/fs/namei.c
  #define EMBEDDED_NAME_MAX	(PATH_MAX - offsetof(struct filename, iname))
  
 +#ifdef CONFIG_NOMOUNT
-+extern bool nomount_should_skip(void);
 +extern struct filename *nomount_getname_hook(struct filename *name);
 +extern int nomount_allow_access(struct inode *inode, int mask);
 +#endif
@@ -78,7 +77,7 @@ diff --git a/fs/namei.c b/fs/namei.c
  	result->uptr = filename;
  	result->aname = NULL;
 +#ifdef CONFIG_NOMOUNT
-+	if (!IS_ERR(result) && !nomount_should_skip()) {
++	if (!IS_ERR(result)) {
 +		result = nomount_getname_hook(result);
 +	}
 +#endif
@@ -119,28 +118,29 @@ diff --git a/fs/namei.c b/fs/namei.c
 diff --git a/fs/open.c b/fs/open.c
 --- a/fs/open.c
 +++ b/fs/open.c
-@@ -xxx,xx +xxx,xx @@ static const struct cred *access_override_creds(void)
- 	return old_cred;
- }
+@@ -xxx,xx +xxx,xx @@
+ #include "internal.h"
+ #include <trace/hooks/syscall_check.h>
  
 +#ifdef CONFIG_NOMOUNT
 +extern bool nomount_handle_faccessat(int dfd, const char __user *filename,
 +									 int mode, unsigned int lookup_flags, long *out_res);
 +#endif
 +
- static long do_faccessat(int dfd, const char __user *filename, int mode, int flags)
+ int do_truncate(struct dentry *dentry, loff_t length, unsigned int time_attrs,
+ 	struct file *filp)
  {
- 	struct path path;
 @@ -xxx,xx +xxx,xx @@ static long do_faccessat(int dfd, const char __user *filename, int mode, int fla
  			return -ENOMEM;
  	}
  
 +#ifdef CONFIG_NOMOUNT
-+	long nm_res;
-+	if (nomount_handle_faccessat(dfd, filename, mode, lookup_flags, &nm_res)) {
-+		revert_creds(old_cred);
-+		put_cred(override_cred);
-+		return nm_res;
++	{
++		long nm_res = 0;
++		if (nomount_handle_faccessat(dfd, filename, mode, lookup_flags, &nm_res)) {
++			res = (int)nm_res;
++			goto out;
++		}
 +	}
 +#endif
 +
@@ -204,33 +204,32 @@ diff --git a/fs/d_path.c b/fs/d_path.c
 diff --git a/fs/readdir.c b/fs/readdir.c
 --- a/fs/readdir.c
 +++ b/fs/readdir.c
-@@ -xx,x +36,xx @@
+@@ -xx,xx +xx,xx @@
  	unsafe_copy_to_user(dst, src, len, label);		\
  } while (0)
  
 +#ifdef CONFIG_NOMOUNT
 +extern void nomount_vfs_inject_dir(struct file *file, struct dir_context *ctx);
-+extern bool nomount_should_skip(void);
-+extern bool nomount_is_traversal_allowed(struct inode *inode, int mask);
 +
-+#define nomount_handle_iterate_dir(file, ctx, shared, res)          \
-+do {                                                                \
-+    loff_t _old_pos = (ctx)->pos;                                   \
-+    if ((ctx)->pos >= 0x7000000 && !nomount_should_skip() &&        \
-+        nomount_is_traversal_allowed(file_inode(file), 0)) {        \
-+        (res) = 0;                                                  \
-+    } else {                                                        \
-+        if (shared)                                                 \
-+            (res) = (file)->f_op->iterate_shared((file), (ctx));    \
-+        else                                                        \
-+            (res) = (file)->f_op->iterate((file), (ctx));           \
-+    }                                                               \
-+                                                                    \
-+    if ((res) >= 0 && !nomount_should_skip()) {                     \
-+        if ((ctx)->pos == _old_pos || (ctx)->pos >= 0x7000000) {    \
-+            nomount_vfs_inject_dir((file), (ctx));                  \
-+        }                                                           \
-+    }                                                               \
++#define nomount_handle_iterate_dir(file, ctx, shared, res)                  \
++do {                                                                        \
++    loff_t _old_pos = (ctx)->pos;                                           \
++    if ((ctx)->pos >= 0x7000000) {                                          \
++        (res) = 0;                                                          \
++    } else {                                                                \
++        if ((shared) && (file)->f_op->iterate_shared)                       \
++            (res) = (file)->f_op->iterate_shared((file), (ctx));            \
++        else if (!(shared) && (file)->f_op->iterate)                        \
++            (res) = (file)->f_op->iterate((file), (ctx));                   \
++        else                                                                \
++            (res) = -ENOTDIR;                                               \
++    }                                                                       \
++                                                                            \
++    if ((res) >= 0) {                                                       \
++        if ((ctx)->pos == _old_pos || (ctx)->pos >= 0x7000000) {            \
++            nomount_vfs_inject_dir((file), (ctx));                          \
++        }                                                                   \
++    }                                                                       \
 +} while (0)
 +#endif
  
@@ -275,7 +274,6 @@ To be undetectable, the metadata of the files and file systems must match their 
 
 ```diff
 diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
-index 839b6d686..bd581901c 100644
 --- a/fs/proc/task_mmu.c
 +++ b/fs/proc/task_mmu.c
 @@ -xxx,xx +xxx,xx @@ static void show_vma_header_prefix(struct seq_file *m,
@@ -283,7 +281,6 @@ index 839b6d686..bd581901c 100644
  }
  
 +#ifdef CONFIG_NOMOUNT
-+extern bool nomount_should_skip(void);
 +extern bool nomount_spoof_mmap_metadata(struct inode *inode, dev_t *dev, unsigned long *ino);
 +#endif
 +
@@ -295,9 +292,7 @@ index 839b6d686..bd581901c 100644
  		dev = inode->i_sb->s_dev;
  		ino = inode->i_ino;
 +#ifdef CONFIG_NOMOUNT
-+		if (!nomount_should_skip()) {
-+			nomount_spoof_mmap_metadata(inode, &dev, &ino);
-+		}
++		nomount_spoof_mmap_metadata(inode, &dev, &ino);
 +#endif
  		pgoff = ((loff_t)vma->vm_pgoff) << PAGE_SHIFT;
  	}
@@ -341,27 +336,27 @@ diff --git a/fs/stat.c b/fs/stat.c
 diff --git a/fs/statfs.c b/fs/statfs.c
 --- a/fs/statfs.c
 +++ b/fs/statfs.c
-@@ -xxx,xx +xxx,xx @@ int vfs_get_fsid(struct dentry *dentry, __kernel_fsid_t *fsid)
- }
- EXPORT_SYMBOL(vfs_get_fsid);
+@@ -xx,xx +xx,xx @@
+ #include <linux/compat.h>
+ #include "internal.h"
  
 +#ifdef CONFIG_NOMOUNT
-+extern bool nomount_should_skip(void);
 +extern void nomount_spoof_statfs(const struct path *path, struct kstatfs *buf);
 +#endif
 +
- int vfs_statfs(const struct path *path, struct kstatfs *buf)
+ static int flags_by_mnt(int mnt_flags)
  {
- 	int error;
+ 	int flags = 0;
 @@ -xxx,xx +xxx,xx @@ int vfs_statfs(const struct path *path, struct kstatfs *buf)
  	error = statfs_by_dentry(path->dentry, buf);
  	if (!error)
  		buf->f_flags = calculate_f_flags(path->mnt);
 +#ifdef CONFIG_NOMOUNT
-+	if (!nomount_should_skip())
-+		nomount_spoof_statfs(path, buf);
++	nomount_spoof_statfs(path, buf);
 +#endif
  	return error;
  }
  EXPORT_SYMBOL(vfs_statfs);
 
+```
+---
