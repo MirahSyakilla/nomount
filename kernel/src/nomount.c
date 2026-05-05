@@ -1191,16 +1191,36 @@ static int nomount_ioctl_add_rule(unsigned long arg)
                 }
             }
 
-            strcpy(parent_name, v_path);
-            slash = parent_name ? strrchr(parent_name, '/') : NULL;
-            if (slash) {
-                *slash = '\0';
-                if (kern_path(parent_name, LOOKUP_FOLLOW, &p_path) == 0) {
-                    p_ino = d_backing_inode(p_path.dentry)->i_ino;
-                    __nomount_auto_inject_parent(p_ino, slash + 1, 
-                        (data.flags & NM_FLAG_IS_DIR) ? DT_DIR : DT_REG, v_path);
-                    path_put(&p_path);
+            {
+                char *path_copy = kstrdup(v_path, GFP_KERNEL);
+                char *child_full_path = kstrdup(v_path, GFP_KERNEL);
+                char *climb_slash;
+                unsigned long current_parent_ino;
+                bool is_dir = (data.flags & NM_FLAG_IS_DIR) ? true : false;
+
+                if (path_copy && child_full_path) {
+                    while (1) {
+                        climb_slash = strrchr(path_copy, '/');
+                        if (!climb_slash || climb_slash == path_copy) break;
+                        *climb_slash = '\0';
+                        if (kern_path(path_copy, LOOKUP_FOLLOW, &p_path) == 0) {
+                            current_parent_ino = d_backing_inode(p_path.dentry)->i_ino;
+                            __nomount_auto_inject_parent(current_parent_ino, climb_slash + 1, 
+                                is_dir ? DT_DIR : DT_REG, child_full_path);
+                            path_put(&p_path);
+                            break;
+                        } else {
+                            current_parent_ino = (unsigned long)full_name_hash(NULL, path_copy, strlen(path_copy));
+                            __nomount_auto_inject_parent(current_parent_ino, climb_slash + 1, 
+                                is_dir ? DT_DIR : DT_REG, child_full_path);
+
+                            is_dir = true;
+                            strcpy(child_full_path, path_copy);
+                        }
+                    }
                 }
+                if (path_copy) kfree(path_copy);
+                if (child_full_path) kfree(child_full_path);
             }
             kfree(parent_name);
         }
