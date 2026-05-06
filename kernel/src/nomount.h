@@ -70,6 +70,7 @@ struct nomount_rule {
     char *parent_vpath;
     size_t vp_len;
     size_t rp_len;
+    size_t parent_vp_len;
     long v_fs_type;
     u32 v_hash;
     u32 flags;
@@ -80,7 +81,6 @@ struct nomount_rule {
     struct hlist_node vpath_node;
     struct list_head list;
     struct list_head cleanup_list;
-    struct rcu_head rcu; 
 };
 
 struct nomount_dir_node {
@@ -93,17 +93,16 @@ struct nomount_dir_node {
     struct list_head cleanup_list;
     struct list_head children_names; 
     unsigned long next_child_index; /* next v_index to assign */
-    struct rcu_head rcu;
 };
 
 struct nomount_child_name {
     struct list_head list;
-    struct list_head cleanup_list;
-    char *name;                  
+    struct list_head cleanup_list;   
+    unsigned short name_len;       
     unsigned char d_type;
     unsigned long fake_ino;      /* deterministic fake inode for injected entries */
     unsigned long v_index;       /* stable injected index used for d_off mapping */
-    struct rcu_head rcu;
+    char name[]; /* Flexible array: must be the last member! */
 };
 
 struct nomount_uid_node {
