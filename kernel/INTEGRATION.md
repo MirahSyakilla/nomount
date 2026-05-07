@@ -211,25 +211,23 @@ diff --git a/fs/readdir.c b/fs/readdir.c
 +#ifdef CONFIG_NOMOUNT
 +extern void nomount_vfs_inject_dir(struct file *file, struct dir_context *ctx);
 +
-+#define nomount_handle_iterate_dir(file, ctx, shared, res)                  \
-+do {                                                                        \
-+    loff_t _old_pos = (ctx)->pos;                                           \
-+    if ((ctx)->pos >= 0x7000000) {                                          \
-+        (res) = 0;                                                          \
-+    } else {                                                                \
-+        if ((shared) && (file)->f_op->iterate_shared)                       \
-+            (res) = (file)->f_op->iterate_shared((file), (ctx));            \
-+        else if (!(shared) && (file)->f_op->iterate)                        \
-+            (res) = (file)->f_op->iterate((file), (ctx));                   \
-+        else                                                                \
-+            (res) = -ENOTDIR;                                               \
-+    }                                                                       \
-+                                                                            \
-+    if ((res) >= 0) {                                                       \
-+        if ((ctx)->pos == _old_pos || (ctx)->pos >= 0x7000000) {            \
-+            nomount_vfs_inject_dir((file), (ctx));                          \
-+        }                                                                   \
-+    }                                                                       \
++#define nomount_handle_iterate_dir(file, ctx, shared, res)          \
++do {                                                                \
++    loff_t _old_pos = (ctx)->pos;                                   \
++    if ((ctx)->pos >= 0x7000000) {        \
++        (res) = 0;                                                  \
++    } else {                                                        \
++        if (shared)                                                 \
++            (res) = (file)->f_op->iterate_shared((file), (ctx));    \
++        else                                                        \
++            (res) = (file)->f_op->iterate((file), (ctx));           \
++    }                                                               \
++                                                                    \
++    if ((res) >= 0) {                     \
++        if ((ctx)->pos == _old_pos || (ctx)->pos >= 0x7000000) {    \
++            nomount_vfs_inject_dir((file), (ctx));                  \
++        }                                                           \
++    }                                                               \
 +} while (0)
 +#endif
  
