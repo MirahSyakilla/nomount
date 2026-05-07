@@ -3,11 +3,13 @@
 * {
     box-sizing: border-box;
     font-family: inherit;
+    -webkit-tap-highlight-color: transparent;
 }
 
 :root {
-    --safe-area-bottom: env(safe-area-inset-bottom, 0px);
     --nav-height: 80px;
+    --insets-top: var(--window-inset-top, env(safe-area-inset-top, 0px));
+    --insets-bottom: var(--window-inset-bottom, env(safe-area-inset-bottom, 0px));
 }
 
 html, body {
@@ -72,10 +74,10 @@ md-icon {
 .page-container {
     flex: 1;
     overflow-y: auto;
-    min-height: 0;
     position: relative;
     width: 100%;
-    padding-bottom: 100px; 
+    padding-top: var(--insets-top);
+    padding-bottom: calc(var(--nav-height) + var(--insets-bottom) + 20px); 
     scroll-behavior: smooth;
     -webkit-overflow-scrolling: touch;
 }
@@ -83,7 +85,6 @@ md-icon {
 .view-content {
     display: none;
     padding: 16px;
-    padding-top: 24px;
     animation: fadeIn 0.2s ease-in-out;
 }
 
@@ -249,7 +250,8 @@ md-icon {
     bottom: 0;
     left: 0;
     width: 100%;
-    height: calc(var(--nav-height) + var(--safe-area-bottom));
+    height: calc(var(--nav-height) + var(--insets-bottom));
+    padding-bottom: var(--insets-bottom);
     background-color: var(--md-sys-color-surface-container);
     display: flex;
     justify-content: space-around;
@@ -270,6 +272,9 @@ md-icon {
     width: 64px;
     cursor: pointer;
     margin-top: 4px;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .nav-item.active {
@@ -286,7 +291,7 @@ md-icon {
 
 #fab-container {
     position: fixed;
-    bottom: calc(var(--nav-height) + var(--safe-area-bottom) + 36px);
+    bottom: calc(var(--nav-height) + var(--insets-bottom) + 20px);
     right: 16px;
     z-index: 90;
     transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1), opacity 0.2s ease;
@@ -335,6 +340,7 @@ md-fab {
     display: flex;
     flex-direction: column;
     padding: 16px;
+    padding-bottom: calc(16px + var(--insets-bottom)); 
     box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
     animation: slideUp 0.3s cubic-bezier(0.2, 0, 0, 1);
 }
@@ -480,5 +486,5 @@ md-fab {
 
 .btn-hot-action.unload {
     background-color: var(--md-sys-color-secondary-error);
-    color: var(--md-sys-color-secondary-error);
+    color: var(--md-sys-color-on-error);
 }

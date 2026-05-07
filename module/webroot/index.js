@@ -411,29 +411,32 @@ let showSystemApps = false;
 async function ensureAppsCache() {
     if (allAppsCache.length > 0) return;
 
-    const res3 = await exec('pm list packages -U -3');
-    const resS = await exec('pm list packages -U -s');
-    
-    const parseOutput = (out, isSys) => {
-        return out.split('\n').map(l => l.trim()).filter(l => l !== '').map(line => {
-            const match = line.match(/package:(.+?)\s+uid:(\d+)/);
-            if (match) {
-                return {
-                    packageName: match[1],
-                    appLabel: match[1], // Fallback label since getting actual names via shell is slow
-                    uid: match[2],
-                    isSystem: isSys,
-                    _searchLabel: match[1].toLowerCase(),
-                    _searchPackage: match[1].toLowerCase()
-                };
-            }
-            return null;
-        }).filter(Boolean);
-    };
-
-    let apps = parseOutput(res3.stdout, false).concat(parseOutput(resS.stdout, true));
-    apps.sort((a, b) => a.packageName.localeCompare(b.packageName));
-    allAppsCache = apps;
+    try {
+        const pkgsRaw = ksu.listPackages("all");
+        const pkgs = JSON.parse(pkgsRaw);
+        const chunkSize = 200;
+        let allInfo = [];
+        for (let i = 0; i < pkgs.length; i += chunkSize) {
+            const chunk = pkgs.slice(i, i + chunkSize);
+            const infoRaw = ksu.getPackagesInfo(JSON.stringify(chunk));
+            allInfo = allInfo.concat(JSON.parse(infoRaw));
+        }
+        allAppsCache = allInfo.map(app => {
+            const label = app.appLabel || app.packageName;
+            return {
+                packageName: app.packageName,
+                appLabel: label,
+                uid: String(app.uid),
+                isSystem: app.isSystem,
+                _searchLabel: label.toLowerCase(),
+                _searchPackage: app.packageName.toLowerCase()
+            };
+        });
+        allAppsCache.sort((a, b) => a.appLabel.localeCompare(b.appLabel));
+    } catch (e) {
+        console.error("Error loading applist:", e);
+        showToast("Error loading applist");
+    }
 }
 
 // Virtualized App List State
@@ -666,27 +669,27 @@ async function addExclusion(uid, name) {
 }
 
 // ── OPTIONS ──────────
+// ── OPTIONS ──────────
 async function loadOptions() {
     const swVerbose = document.getElementById('setting-verbose');
     const swSafe = document.getElementById('setting-safemode');
     const btnClear = document.getElementById('btn-clear-rules');
-
     const v = await exec(`[ -f ${FILES.verbose} ] && echo yes`);
     const s = await exec(`[ -f ${FILES.disable} ] && echo yes`);
-    
-    if(swVerbose) swVerbose.checked = v.stdout.includes('yes');
-    if(swSafe) swSafe.checked = s.stdout.includes('yes');
+
+    if(swVerbose) swVerbose.selected = v.stdout.includes('yes');
+    if(swSafe) swSafe.selected = s.stdout.includes('yes');
 
     if(swVerbose) {
-        swVerbose.onchange = (e) => {
-            exec(e.target.checked ? `touch ${FILES.verbose}` : `rm ${FILES.verbose}`);
-        };
+        swVerbose.addEventListener('change', (e) => {
+            exec(e.target.selected ? `touch ${FILES.verbose}` : `rm ${FILES.verbose}`);
+        });
     }
 
     if(swSafe) {
-        swSafe.onchange = (e) => {
-            exec(e.target.checked ? `touch ${FILES.disable}` : `rm ${FILES.disable}`);
-        };
+        swSafe.addEventListener('change', (e) => {
+            exec(e.target.selected ? `touch ${FILES.disable}` : `rm ${FILES.disable}`);
+        });
     }
 
     if(btnClear) {
@@ -719,7 +722,11 @@ function initPullToRefresh() {
     let pullDistance = 0;
     const pullThreshold = 90; 
 
-    const isRefreshableView = () => document.querySelector('.view-content.active') !== null;
+    const isRefreshableView = () => {
+        const activeView = document.querySelector('.view-content.active');
+        return activeView && (activeView.id === 'view-modules' || activeView.id === 'view-exclusions');
+    };
+
 
     container.addEventListener('touchstart', (e) => {
         if (isGlobalLoading || container.scrollTop !== 0 || !isRefreshableView()) {
