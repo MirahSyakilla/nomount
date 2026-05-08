@@ -45,13 +45,12 @@ diff --git a/fs/Makefile b/fs/Makefile
 ---
 
 ## 2. Path Lookup, Access Control, and Permissions.
-*   **Files:** `fs/namei.c` and `fs/open.c`
-*   **Hooks:** `getname_flags`, `generic_permission`, `inode_permission` (en `namei.c`) y `do_faccessat` (en `open.c`).
+*   **Files:** `fs/namei.c`
+*   **Hooks:** `getname_flags`, `generic_permission` and `inode_permission`
 *   **Purpose:** Intercept text strings (paths) that come from the Userspace before the kernel converts them into physical structures (`dentry`/`inode`). And also ensure that the injected files can be traversed and read, while correctly simulating the typical attributes of system partitions.
 *   **Mechanism:**
     *   In `namei.c`, the `nomount_getname_hook` hook is executed immediately after copying the path from the user. If the path matches an active rule, the original string is replaced with the actual path of the redirected file. The rest of the kernel processes the call without knowing that it was tricked.
     *   In `namei.c`, the `nomount_allow_access` hook forces a return of `0` (Success) to prevent native DAC/MAC checks (like SELinux) from blocking access to our injected folders.
-    *   In `open.c`, the `nomount_handle_faccessat` hook intercepts early calls that use Directory File Descriptors (`dfd`) to resolve relative paths (e.g., `openat(dir_fd, "su")`). It reconstructs the absolute path and checks it against active rules. If it matches, it forces an Early Exit returning the correct access rights (spoofing Read-Only for `MAY_WRITE`), thus completely neutralizing evasion techniques that bypass absolute path filters.
 *   **Integration:**
 
 #### `fs/namei.c`:
@@ -110,43 +109,6 @@ diff --git a/fs/namei.c b/fs/namei.c
  	retval = sb_permission(inode->i_sb, inode, mask);
  	if (retval)
  		return retval;
-```
-
-#### `fs/open.c`:
-
-```diff
-diff --git a/fs/open.c b/fs/open.c
---- a/fs/open.c
-+++ b/fs/open.c
-@@ -xxx,xx +xxx,xx @@
- #include "internal.h"
- #include <trace/hooks/syscall_check.h>
- 
-+#ifdef CONFIG_NOMOUNT
-+extern bool nomount_handle_faccessat(int dfd, const char __user *filename,
-+									 int mode, unsigned int lookup_flags, long *out_res);
-+#endif
-+
- int do_truncate(struct dentry *dentry, loff_t length, unsigned int time_attrs,
- 	struct file *filp)
- {
-@@ -xxx,xx +xxx,xx @@ static long do_faccessat(int dfd, const char __user *filename, int mode, int fla
- 			return -ENOMEM;
- 	}
- 
-+#ifdef CONFIG_NOMOUNT
-+	{
-+		long nm_res = 0;
-+		if (nomount_handle_faccessat(dfd, filename, mode, lookup_flags, &nm_res)) {
-+			res = (int)nm_res;
-+			goto out;
-+		}
-+	}
-+#endif
-+
- retry:
- 	res = user_path_at(dfd, filename, lookup_flags, &path);
- 	if (res)
 ```
 
 ---
@@ -210,24 +172,28 @@ diff --git a/fs/readdir.c b/fs/readdir.c
  
 +#ifdef CONFIG_NOMOUNT
 +extern void nomount_vfs_inject_dir(struct file *file, struct dir_context *ctx);
++extern bool nomount_should_skip(void);
++#define NOMOUNT_MAGIC_POS 0x7000000000000000ULL
 +
-+#define nomount_handle_iterate_dir(file, ctx, shared, res)          \
-+do {                                                                \
-+    loff_t _old_pos = (ctx)->pos;                                   \
-+    if ((ctx)->pos >= 0x7000000) {        \
-+        (res) = 0;                                                  \
-+    } else {                                                        \
-+        if (shared)                                                 \
-+            (res) = (file)->f_op->iterate_shared((file), (ctx));    \
-+        else                                                        \
-+            (res) = (file)->f_op->iterate((file), (ctx));           \
-+    }                                                               \
-+                                                                    \
-+    if ((res) >= 0) {                     \
-+        if ((ctx)->pos == _old_pos || (ctx)->pos >= 0x7000000) {    \
-+            nomount_vfs_inject_dir((file), (ctx));                  \
-+        }                                                           \
-+    }                                                               \
++#define nomount_handle_iterate_dir(file, ctx, shared, res)               \
++do {                                                                     \
++    loff_t _old_pos = (ctx)->pos;                                        \
++    bool _nm_skip = nomount_should_skip();                               \
++                                                                         \
++    if ((ctx)->pos >= NOMOUNT_MAGIC_POS && !_nm_skip) {                  \
++        (res) = 0;                                                       \
++    } else {                                                             \
++        if (shared)                                                      \
++            (res) = (file)->f_op->iterate_shared((file), (ctx));         \
++        else                                                             \
++            (res) = (file)->f_op->iterate((file), (ctx));                \
++    }                                                                    \
++                                                                         \
++    if ((res) >= 0 && !_nm_skip) {                                       \
++        if ((ctx)->pos == _old_pos || (ctx)->pos >= NOMOUNT_MAGIC_POS) { \
++            nomount_vfs_inject_dir((file), (ctx));                       \
++        }                                                                \
++    }                                                                    \
 +} while (0)
 +#endif
  

@@ -110,39 +110,6 @@ index 40e10b159..9acb062fd 100644
  	retval = sb_permission(inode->i_sb, inode, mask);
  	if (retval)
  		return retval;
-diff --git a/fs/open.c b/fs/open.c
-index 1438eb643..0f92eb339 100644
---- a/fs/open.c
-+++ b/fs/open.c
-@@ -36,6 +36,11 @@
- #include "internal.h"
- #include <trace/hooks/syscall_check.h>
- 
-+#ifdef CONFIG_NOMOUNT
-+extern bool nomount_handle_faccessat(int dfd, const char __user *filename,
-+									 int mode, unsigned int lookup_flags, long *out_res);
-+#endif
-+
- int do_truncate(struct dentry *dentry, loff_t length, unsigned int time_attrs,
- 	struct file *filp)
- {
-@@ -420,6 +425,16 @@ static long do_faccessat(int dfd, const char __user *filename, int mode, int fla
- 			return -ENOMEM;
- 	}
- 
-+#ifdef CONFIG_NOMOUNT
-+	{
-+		long nm_res = 0;
-+		if (nomount_handle_faccessat(dfd, filename, mode, lookup_flags, &nm_res)) {
-+			res = (int)nm_res;
-+			goto out;
-+		}
-+	}
-+#endif
-+
- retry:
- 	res = user_path_at(dfd, filename, lookup_flags, &path);
- 	if (res)
 diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
 index 839b6d686..c5354fc53 100644
 --- a/fs/proc/task_mmu.c

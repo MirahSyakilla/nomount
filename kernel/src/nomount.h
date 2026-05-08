@@ -4,53 +4,33 @@
 #include <linux/types.h>
 #include <linux/list.h>
 #include <linux/hashtable.h>
-#include <linux/spinlock.h>
-#include <linux/limits.h>
 #include <linux/atomic.h>
-#include <linux/uidgid.h>
-#include <linux/stat.h>
 #include <linux/ioctl.h>
-#include <linux/rcupdate.h>
-#include <linux/bitmap.h>
-#include <linux/hash.h>
-#include <linux/xattr.h>
-#include <linux/version.h>
-
-#include <asm/local.h>
 
 #define NOMOUNT_MAGIC_CODE 0x4E /* 'N' */
 #define NOMOUNT_VERSION    2
 #define NOMOUNT_HASH_BITS  12
-#define NM_FLAG_ACTIVE        (1 << 0)
+#define NOMOUNT_UID_HASH_BITS 4
 #define NM_FLAG_IS_DIR        (1 << 7)
 #define NOMOUNT_MAGIC_POS 0x7000000000000000ULL
-#define NOMOUNT_IOC_MAGIC  NOMOUNT_MAGIC_CODE
-#define NOMOUNT_IOC_ADD_RULE    _IOW(NOMOUNT_IOC_MAGIC, 1, struct nomount_ioctl_data)
-#define NOMOUNT_IOC_DEL_RULE    _IOW(NOMOUNT_IOC_MAGIC, 2, struct nomount_ioctl_data)
-#define NOMOUNT_IOC_CLEAR_ALL   _IO(NOMOUNT_IOC_MAGIC, 3)
-#define NOMOUNT_IOC_GET_VERSION _IOR(NOMOUNT_IOC_MAGIC, 4, int)
-#define NOMOUNT_IOC_ADD_UID     _IOW(NOMOUNT_IOC_MAGIC, 5, unsigned int)
-#define NOMOUNT_IOC_DEL_UID     _IOW(NOMOUNT_IOC_MAGIC, 6, unsigned int)
-#define NOMOUNT_IOC_GET_LIST _IOR(NOMOUNT_IOC_MAGIC, 7, int)
+#define NOMOUNT_IOC_ADD_RULE    _IOW(NOMOUNT_MAGIC_CODE, 1, struct nomount_ioctl_data)
+#define NOMOUNT_IOC_DEL_RULE    _IOW(NOMOUNT_MAGIC_CODE, 2, struct nomount_ioctl_data)
+#define NOMOUNT_IOC_CLEAR_ALL   _IO(NOMOUNT_MAGIC_CODE,  3)
+#define NOMOUNT_IOC_GET_VERSION _IOR(NOMOUNT_MAGIC_CODE, 4, int)
+#define NOMOUNT_IOC_ADD_UID     _IOW(NOMOUNT_MAGIC_CODE, 5, unsigned int)
+#define NOMOUNT_IOC_DEL_UID     _IOW(NOMOUNT_MAGIC_CODE, 6, unsigned int)
+#define NOMOUNT_IOC_GET_LIST    _IOR(NOMOUNT_MAGIC_CODE, 7, int)
 #define MAX_LIST_BUFFER_SIZE (1024 * 1024)
-#define NM_MAX_PARENTS 16
-#define NOMOUNT_BLOOM_BITS 20
-#define NOMOUNT_BLOOM_SIZE (1 << NOMOUNT_BLOOM_BITS)
 
-static DEFINE_HASHTABLE(nomount_dirs_ht, NOMOUNT_HASH_BITS);
-static DEFINE_HASHTABLE(nomount_uid_ht, NOMOUNT_HASH_BITS);
-static DEFINE_HASHTABLE(nomount_rules_by_vpath, NOMOUNT_HASH_BITS);
+static DEFINE_HASHTABLE(nomount_dirs_ht,           NOMOUNT_HASH_BITS);
+static DEFINE_HASHTABLE(nomount_rules_by_vpath,    NOMOUNT_HASH_BITS);
 static DEFINE_HASHTABLE(nomount_rules_by_real_ino, NOMOUNT_HASH_BITS);
 static DEFINE_HASHTABLE(nomount_rules_by_v_ino,    NOMOUNT_HASH_BITS);
+static DEFINE_HASHTABLE(nomount_basenames_ht,      NOMOUNT_HASH_BITS);
+static DEFINE_HASHTABLE(nomount_uid_ht,            NOMOUNT_UID_HASH_BITS);
 static LIST_HEAD(nomount_rules_list);
 static LIST_HEAD(nomount_private_dirs_list);
 static DEFINE_MUTEX(nomount_write_mutex);
-extern struct cred init_cred;
-struct kstatfs;
-
-/* filter bloom logic */
-static unsigned short *nomount_bloom_paths = NULL;
-static unsigned short *nomount_bloom_inos = NULL;
 
 struct nomount_ioctl_data {
     char __user *virtual_path;
@@ -68,17 +48,17 @@ struct nomount_rule {
     char *virtual_path;
     char *real_path;
     char *parent_vpath;
+    const char *basename;
     size_t vp_len;
     size_t rp_len;
     size_t parent_vp_len;
     long v_fs_type;
     u32 v_hash;
     u32 flags;
-    kuid_t v_uid;
-    kgid_t v_gid;
     struct hlist_node v_ino_node;
     struct hlist_node real_ino_node;
     struct hlist_node vpath_node;
+    struct hlist_node basename_node;
     struct list_head list;
     struct list_head cleanup_list;
 };
@@ -110,35 +90,7 @@ struct nomount_uid_node {
     struct hlist_node node;
     struct list_head list;
     struct list_head cleanup_list;
-    struct rcu_head rcu;
 };
-
-/* Wrapper for vfs_getxattr across different kernel versions */
-static inline ssize_t nm_vfs_getxattr(struct dentry *dentry, const char *name, void *value, size_t size)
-{
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
-    /* Kernel 6.3+ uses mnt_idmap */
-    return vfs_getxattr(&nop_mnt_idmap, dentry, name, value, size);
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-    /* Kernel 5.12 to 6.2 uses user_namespace */
-    return vfs_getxattr(&init_user_ns, dentry, name, value, size);
-#else
-    /* Kernel < 5.12 uses the classic signature */
-    return vfs_getxattr(dentry, name, value, size);
-#endif
-}
-
-/* Wrapper for vfs_setxattr across different kernel versions */
-static inline int nm_vfs_setxattr(struct dentry *dentry, const char *name, const void *value, size_t size, int flags)
-{
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
-    return vfs_setxattr(&nop_mnt_idmap, dentry, name, value, size, flags);
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-    return vfs_setxattr(&init_user_ns, dentry, name, value, size, flags);
-#else
-    return vfs_setxattr(dentry, name, value, size, flags);
-#endif
-}
 
 /*
  * Recursion tracking for nomount operations. 
