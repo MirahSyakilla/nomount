@@ -23,30 +23,6 @@
     };
 
     __attribute__((always_inline))
-    static inline long sys1(long n, long a) {
-        register long x8 asm("x8") = n;
-        register long x0 asm("x0") = a;
-        __asm__ __volatile__("svc 0" : "+r"(x0) : "r"(x8) : "memory", "cc");
-        return x0;
-    }
-    __attribute__((always_inline))
-    static inline long sys2(long n, long a, long b) {
-        register long x8 asm("x8") = n;
-        register long x0 asm("x0") = a;
-        register long x1 asm("x1") = b;
-        __asm__ __volatile__("svc 0" : "+r"(x0) : "r"(x8), "r"(x1) : "memory", "cc");
-        return x0;
-    }
-    __attribute__((always_inline))
-    static inline long sys3(long n, long a, long b, long c) {
-        register long x8 asm("x8") = n;
-        register long x0 asm("x0") = a;
-        register long x1 asm("x1") = b;
-        register long x2 asm("x2") = c;
-        __asm__ __volatile__("svc 0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2) : "memory", "cc");
-        return x0;
-    }
-    __attribute__((always_inline))
     static inline long sys4(long n, long a, long b, long c, long d) {
         register long x8 asm("x8") = n;
         register long x0 asm("x0") = a;
@@ -56,6 +32,9 @@
         __asm__ __volatile__("svc 0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2), "r"(x3) : "memory", "cc");
         return x0;
     }
+    #define sys1(n,a) sys4(n,a,0,0,0)
+    #define sys2(n,a,b) sys4(n,a,b,0,0)
+    #define sys3(n,a,b,c) sys4(n,a,b,c,0)
     __attribute__((naked)) void _start(void) { __asm__ volatile("mov x0, sp\n bl c_main\n"); }
 
 #elif defined(__arm__)
@@ -82,30 +61,6 @@
     };
 
     __attribute__((always_inline))
-    static inline long sys1(long n, long a) {
-        register long r7 asm("r7") = n;
-        register long r0 asm("r0") = a;
-        __asm__ __volatile__("svc 0" : "+r"(r0) : "r"(r7) : "memory", "cc");
-        return r0;
-    }
-    __attribute__((always_inline))
-    static inline long sys2(long n, long a, long b) {
-        register long r7 asm("r7") = n;
-        register long r0 asm("r0") = a;
-        register long r1 asm("r1") = b;
-        __asm__ __volatile__("svc 0" : "+r"(r0) : "r"(r7), "r"(r1) : "memory", "cc");
-        return r0;
-    }
-    __attribute__((always_inline))
-    static inline long sys3(long n, long a, long b, long c) {
-        register long r7 asm("r7") = n;
-        register long r0 asm("r0") = a;
-        register long r1 asm("r1") = b;
-        register long r2 asm("r2") = c;
-        __asm__ __volatile__("svc 0" : "+r"(r0) : "r"(r7), "r"(r1), "r"(r2) : "memory", "cc");
-        return r0;
-    }
-    __attribute__((always_inline))
     static inline long sys4(long n, long a, long b, long c, long d) {
         register long r7 asm("r7") = n;
         register long r0 asm("r0") = a;
@@ -115,6 +70,9 @@
         __asm__ __volatile__("svc 0" : "+r"(r0) : "r"(r7), "r"(r1), "r"(r2), "r"(r3) : "memory", "cc");
         return r0;
     }
+    #define sys1(n,a) sys4(n,a,0,0,0)
+    #define sys2(n,a,b) sys4(n,a,b,0,0)
+    #define sys3(n,a,b,c) sys4(n,a,b,c,0)
     __attribute__((naked)) void _start(void) { __asm__ volatile("mov r0, sp\n bl c_main\n"); }
 #else
     #error "Arch not supported"
@@ -132,9 +90,7 @@ typedef unsigned long size_t;
 #define IOCTL_ADD_UID 0x40044E05
 #define IOCTL_DEL_UID 0x40044E06
 #define IOCTL_LIST    0x80044E07
-#define IOCTL_REFRESH   0x4E08
 
-#define NM_ACTIVE 1
 #define NM_DIR    128
 #define PATH_MAX  4096
 #define AT_SYMLINK_NOFOLLOW 0x100
@@ -259,7 +215,8 @@ void c_main(long *sp) {
 
     switch (cmd) {
         case 'a':
-        case 'd': {
+        case 'd':
+        case 'r': {
             int step = (cmd == 'a') ? 2 : 1;
             if (argc < 2 + step) goto do_exit;
 
@@ -288,7 +245,7 @@ void c_main(long *sp) {
                 #endif
                 ioctl_arg = &data;
 
-                if (cmd == 'd') {
+                if (cmd == 'd' || cmd == 'r') {
                     ioctl_code = IOCTL_DEL;
                     long res = sys3(SYS_IOCTL, fd, ioctl_code, (long)ioctl_arg);
                     if (res < 0) exit_code = -res;
@@ -336,7 +293,7 @@ void c_main(long *sp) {
                                     step_data.vp_lo = (unsigned int)v_ptr;
                                     step_data.rp_lo = (unsigned int)rp_to_send;
                                 #endif
-                                step_data.flags = NM_ACTIVE | NM_DIR;
+                                step_data.flags = NM_DIR;
 
                                 unsigned int st_real[32];
                                 if (sys4(SYS_FSTATAT, AT_FDCWD, (long)rp_to_send, (long)st_real, AT_SYMLINK_NOFOLLOW) == 0) {
@@ -366,8 +323,6 @@ void c_main(long *sp) {
                         data.vp_lo = (unsigned int)v_ptr;
                         data.rp_lo = (unsigned int)r_ptr;
                     #endif
-                    
-                    data.flags = NM_ACTIVE;
 
                     unsigned int *stat_buf = (unsigned int *)(stack_buf + 32768);
                     if (sys4(SYS_FSTATAT, AT_FDCWD, (long)r_ptr, (long)stat_buf, AT_SYMLINK_NOFOLLOW) == 0) {
@@ -408,12 +363,8 @@ void c_main(long *sp) {
             ioctl_code = IOCTL_VER;
             break;
         case 'l':
-            if (argc > 2 && argv[2][0] == 'j') json = 1;
             ioctl_code = IOCTL_LIST;
             ioctl_arg = (void *)((char *)sp - 1048576); 
-            break;
-        case 'r':
-            ioctl_code = IOCTL_REFRESH;
             break;
         default:
             goto do_exit;
@@ -429,7 +380,7 @@ void c_main(long *sp) {
         else if (cmd == 'l' && res > 0) {
             char *curr = (char *)ioctl_arg;
             char *end = curr + res;
-            if (json) {
+            if (argc > 2 && argv[2][0] == 'j') {
                 char *json_out_buf = end;
                 int json_out_pos = 0;
 
