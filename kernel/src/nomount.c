@@ -111,6 +111,26 @@ static inline bool __nomount_is_traversal_allowed_rcu(unsigned long ino) {
 /*** Helpers & Path Resolution ***/
 
 /**
+ * nomount_drop_vpath_cache - Force VFS to drop dcache for a specific path
+ * @path_str: The native absolute path to flush
+ * @is_dir: True if we should aggressively invalidate a directory
+ */
+static void nomount_drop_vpath_cache(const char *path_str, bool is_dir)
+{
+    struct path path;
+    nm_enter();
+    if (kern_path(path_str, 0, &path) == 0) {
+        if (is_dir) {
+            d_invalidate(path.dentry);
+        } else {
+            d_drop(path.dentry);
+        }
+        path_put(&path);
+    }
+    nm_exit();
+}
+
+/**
  * __nomount_collect_parents - Track parent directories of a real path
  * @real_path: The absolute path of the underlying target file
  *
@@ -851,6 +871,7 @@ static int nomount_ioctl_add_rule(unsigned long arg)
                             current_parent_ino = d_backing_inode(p_path.dentry)->i_ino;
                             __nomount_auto_inject_parent(current_parent_ino, tmp_path + 1, 
                                 is_dir ? DT_DIR : DT_REG, full_name_hash(NULL, v_path, child_len));
+                            d_invalidate(p_path.dentry);
                             path_put(&p_path);
                         }
                         break;
@@ -869,6 +890,7 @@ static int nomount_ioctl_add_rule(unsigned long arg)
                         current_parent_ino = d_backing_inode(p_path.dentry)->i_ino;
                         __nomount_auto_inject_parent(current_parent_ino, slash + 1, 
                             is_dir ? DT_DIR : DT_REG, full_name_hash(NULL, v_path, child_len));
+                        d_invalidate(p_path.dentry);
                         path_put(&p_path);
                         break; 
                     } else {
@@ -902,6 +924,7 @@ static int nomount_ioctl_add_rule(unsigned long arg)
 
     list_add_tail_rcu(&rule->list, &nomount_rules_list);
     atomic_inc(&nm_active_rules);
+    nomount_drop_vpath_cache(v_path, (data.flags & NM_FLAG_IS_DIR));
     mutex_unlock(&nomount_write_mutex);
 
     return 0;
@@ -976,6 +999,7 @@ ghost_found:
             break;
         }
     }
+    nomount_drop_vpath_cache(v_path, (rule->flags & NM_FLAG_IS_DIR));
     mutex_unlock(&nomount_write_mutex);
 
     if (victim) {
