@@ -11,16 +11,6 @@
     #define SYS_WRITE      64
     #define SYS_FSTATAT    79 
     #define SYS_EXIT       93
-    #define STAT_MODE_IDX  4   
-
-    struct ioctl_data {
-        unsigned long vp;
-        unsigned long rp;
-        unsigned int flags;
-        unsigned int _pad;
-        unsigned long real_ino;
-        unsigned long real_dev;
-    };
 
     __attribute__((always_inline))
     static inline long sys4(long n, long a, long b, long c, long d) {
@@ -45,20 +35,6 @@
     #define SYS_GETCWD     183
     #define SYS_OPENAT     322
     #define SYS_FSTATAT    327
-    #define STAT_MODE_IDX  4
-
-    struct ioctl_data {
-        unsigned int vp_lo;
-        unsigned int vp_hi;
-        unsigned int rp_lo;
-        unsigned int rp_hi;
-        unsigned int flags;
-        unsigned int _pad;
-        unsigned int real_ino_lo;
-        unsigned int real_ino_hi;
-        unsigned int real_dev_lo;
-        unsigned int real_dev_hi;
-    };
 
     __attribute__((always_inline))
     static inline long sys4(long n, long a, long b, long c, long d) {
@@ -81,10 +57,20 @@
 /* --- DEFS --- */
 typedef unsigned long size_t;
 #define AT_FDCWD -100
+#define AT_SYMLINK_NOFOLLOW 0x100
 #define O_RDWR 2
+#define STAT_MODE_IDX 4
 
-#define IOCTL_ADD     0x40284E01
-#define IOCTL_DEL     0x40284E02
+struct ioctl_data {
+    unsigned long long vp;
+    unsigned long long rp;
+    unsigned int flags;
+    unsigned int _pad;
+    unsigned long long real_ino;
+};
+
+#define IOCTL_ADD     0x40204E01
+#define IOCTL_DEL     0x40204E02
 #define IOCTL_CLEAR   0x4E03
 #define IOCTL_VER     0x80044E04
 #define IOCTL_ADD_UID 0x40044E05
@@ -93,96 +79,33 @@ typedef unsigned long size_t;
 
 #define NM_DIR    128
 #define PATH_MAX  4096
-#define AT_SYMLINK_NOFOLLOW 0x100
 
 /* complete path resolution */
 __attribute__((noinline))
 static int resolve_path(char *result, const char *cwd, const char *rel_path, int max_len) {
     int r_pos = 0;
     int c_len = 0;
-    int limit = max_len - 1;
 
-    /* if its a relative path and we have cwd, prepend cwd */
-    if (rel_path[0] != '/' && cwd && cwd[0]) {
-        while (cwd[c_len] && r_pos < limit) {
-            result[r_pos++] = cwd[c_len++];
+    if (rel_path[0] == '/') {
+        while (rel_path[r_pos] && r_pos < max_len - 1) {
+            result[r_pos] = rel_path[r_pos];
+            r_pos++;
         }
-        /* secure slash */
-        if (r_pos > 0 && result[r_pos-1] != '/') {
-            if (r_pos < limit) result[r_pos++] = '/';
-        }
-    }
-
-    const char *src = rel_path;
-    while (*src && r_pos < limit) {
-        /* ignore ./ */
-        if (src[0] == '.' && src[1] == '/') {
-            src += 2;
-            continue;
-        }
-
-        /* ignore redundant slashes, but keep the initial one if it is absolute. */
-        if (src[0] == '/') {
-            if (src == rel_path && rel_path[0] == '/') {
-                /* absolute path - retain the initial slash */
-                if (r_pos == 0) {
-                    result[r_pos++] = '/';
-                }
-            } else if (src > rel_path && src[-1] == '/') {
-                /* redundant slash - skip it */
-                src++;
-                continue;
-            }
-            src++;
-            continue;
-        }
-
-        /* handle ../ OR .. at end of string */
-        if (src[0] == '.' && src[1] == '.' && (src[2] == '/' || src[2] == '\0')) {
-            if (r_pos > 1) {
-                /* search last slash */
-                int last_slash = r_pos-1;
-                while (last_slash > 0 && result[last_slash] != '/') 
-                    last_slash--;
-                
-                /* back to that slash */
-                if (last_slash >= 0) {
-                    r_pos = (last_slash > 0) ? last_slash : 1;
-                    /* keep slash root */
-                    if (r_pos == 1 && result[0] == '/') {
-                        /* OK */
-                    }
-                }
-            }
-
-            if (src[2] == '/') {
-                src += 3;  /* skip "../" */
-            } else {
-                src += 2;  /* skip ".." y terminar */
-            }
-            continue;
-        }
-
-        /* copy normal component */
-        while (*src && *src != '/' && r_pos < limit) {
-            result[r_pos++] = *src++;
-        }
-
-        /* add slash if there is more path */
-        if (*src == '/') {
-            if (r_pos < limit) result[r_pos++] = '/';
-            src++;
-        }
-    }
-    
-    /* null terminate */
-    if (r_pos < max_len) {
-        result[r_pos] = '\0';
     } else {
-        result[limit] = '\0';
-        r_pos = limit;
+        if (cwd) {
+            while (cwd[c_len] && r_pos < max_len - 1) {
+                result[r_pos++] = cwd[c_len++];
+            }
+            if (r_pos > 0 && result[r_pos-1] != '/' && r_pos < max_len - 1) {
+                result[r_pos++] = '/';
+            }
+        }
+        int p_pos = 0;
+        while (rel_path[p_pos] && r_pos < max_len - 1) {
+            result[r_pos++] = rel_path[p_pos++];
+        }
     }
-    
+    result[r_pos] = '\0';
     return r_pos;
 }
 
@@ -217,7 +140,8 @@ void c_main(long *sp) {
         case 'a':
         case 'd':
         case 'r': {
-            int step = (cmd == 'a') ? 2 : 1;
+            int is_add = (cmd == 'a');
+            int step = is_add ? 2 : 1;
             if (argc < 2 + step) goto do_exit;
 
             char *stack_buf = (char *)sp - 65536;
@@ -227,115 +151,71 @@ void c_main(long *sp) {
 
             long cwd_len = sys2(SYS_GETCWD, (long)cwd_buf, PATH_MAX);
             const char *cwd = (cwd_len > 0) ? cwd_buf : "/";
+            unsigned long long st_buf[32];
 
-            exit_code = 0; // initialize to success for batch operations
+            exit_code = 0; 
 
             for (int arg_idx = 2; arg_idx + step <= argc; arg_idx += step) {
-                char *v_src = argv[arg_idx];
-                int v_len = resolve_path(v_resolved, cwd, v_src, PATH_MAX);
-                if (v_len == 0) {
-                    exit_code = 3;
-                    continue;
-                }
+                int v_len = resolve_path(v_resolved, cwd, argv[arg_idx], PATH_MAX);
+                if (v_len == 0) { exit_code = 3; continue; }
 
-                #if defined(__aarch64__)
-                    data.vp = (unsigned long)v_resolved;
-                #else
-                    data.vp_lo = (unsigned int)v_resolved;
-                #endif
+                data.vp = (unsigned long)v_resolved;
                 ioctl_arg = &data;
 
-                if (cmd == 'd' || cmd == 'r') {
+                if (!is_add) {
                     ioctl_code = IOCTL_DEL;
                     long res = sys3(SYS_IOCTL, fd, ioctl_code, (long)ioctl_arg);
                     if (res < 0) exit_code = -res;
                 } else { 
-                    char *r_src = argv[arg_idx+1];
-                    char *v_ptr;
-                    char *r_ptr;
+                    int r_len = resolve_path(r_resolved, cwd, argv[arg_idx+1], PATH_MAX);
+                    if (r_len == 0) { exit_code = 3; continue; }
 
-                    int r_len = resolve_path(r_resolved, cwd, r_src, PATH_MAX);
-
-                    if (r_len == 0) {
-                        exit_code = 3;
-                        continue;
-                    }
-                    
-                    v_ptr = v_resolved;
-                    r_ptr = r_resolved;
-
+                    data.rp = (unsigned long)r_resolved;
                     int slashes = 0;
                     for (int i = 0; i < v_len; i++) {
-                        if (v_ptr[i] == '/') {
+                        if (v_resolved[i] == '/') {
                             slashes++;
                             if (slashes < 2 || i == 0) continue;
                             
-                            v_ptr[i] = '\0';
-
-                            int diff = v_len - i;
-                            int r_cut = r_len - diff;
+                            v_resolved[i] = '\0';
+                            int r_cut = r_len - (v_len - i);
                             char r_saved = 0;
 
                             if (r_cut > 0 && r_cut < r_len) {
-                                r_saved = r_ptr[r_cut];
-                                r_ptr[r_cut] = '\0';
+                                r_saved = r_resolved[r_cut];
+                                r_resolved[r_cut] = '\0';
                             }
 
-                            unsigned int st_tmp[32];
-                            long stat_res = sys4(SYS_FSTATAT, AT_FDCWD, (long)v_ptr, (long)st_tmp, AT_SYMLINK_NOFOLLOW);
-                            if (stat_res != 0) {
+                            if (sys4(SYS_FSTATAT, AT_FDCWD, (long)v_resolved, (long)st_buf, AT_SYMLINK_NOFOLLOW) != 0) {
                                 struct ioctl_data step_data = {0};
-                                char *rp_to_send = (r_cut > 0 && r_cut < r_len) ? r_ptr : "/";
-                                #if defined(__aarch64__)
-                                    step_data.vp = (unsigned long)v_ptr;
-                                    step_data.rp = (unsigned long)rp_to_send;
-                                #else
-                                    step_data.vp_lo = (unsigned int)v_ptr;
-                                    step_data.rp_lo = (unsigned int)rp_to_send;
-                                #endif
+                                char *rp_to_send = (r_cut > 0 && r_cut < r_len) ? r_resolved : "/";
+                                step_data.vp = (unsigned long)v_resolved;
+                                step_data.rp = (unsigned long)rp_to_send;
                                 step_data.flags = NM_DIR;
 
-                                unsigned int st_real[32];
-                                if (sys4(SYS_FSTATAT, AT_FDCWD, (long)rp_to_send, (long)st_real, AT_SYMLINK_NOFOLLOW) == 0) {
-                                    unsigned long long *st_large = (unsigned long long *)st_real;
+                                if (sys4(SYS_FSTATAT, AT_FDCWD, (long)rp_to_send, (long)st_buf, AT_SYMLINK_NOFOLLOW) == 0) {
                                     #if defined(__aarch64__)
-                                        step_data.real_dev = st_large[0]; 
-                                        step_data.real_ino = st_large[1];
+                                        step_data.real_ino = ((unsigned long long *)st_buf)[1];
                                     #else
-                                        step_data.real_dev_lo = st_real[0]; 
-                                        step_data.real_ino_lo = st_real[3];
+                                        step_data.real_ino = ((unsigned int*)st_buf)[3];
                                     #endif
                                 }
                                 sys3(SYS_IOCTL, fd, IOCTL_ADD, (long)&step_data);
                             }
 
-                            v_ptr[i] = '/';
-                            if (r_cut > 0 && r_cut < r_len) {
-                                r_ptr[r_cut] = r_saved;
-                            }
+                            v_resolved[i] = '/';
+                            if (r_cut > 0 && r_cut < r_len) r_resolved[r_cut] = r_saved;
                         }
                     }
 
-                    #if defined(__aarch64__)
-                        data.vp = (unsigned long)v_ptr;
-                        data.rp = (unsigned long)r_ptr;
-                    #else
-                        data.vp_lo = (unsigned int)v_ptr;
-                        data.rp_lo = (unsigned int)r_ptr;
-                    #endif
-
-                    unsigned int *stat_buf = (unsigned int *)(stack_buf + 32768);
-                    if (sys4(SYS_FSTATAT, AT_FDCWD, (long)r_ptr, (long)stat_buf, AT_SYMLINK_NOFOLLOW) == 0) {
-                        unsigned int mode = stat_buf[STAT_MODE_IDX];
-                        if ((mode & 0170000) == 0040000) data.flags |= NM_DIR;
-                        unsigned long long *st_large = (unsigned long long *)stat_buf;
-
+                    data.flags = 0;
+                    data.real_ino = 0;
+                    if (sys4(SYS_FSTATAT, AT_FDCWD, (long)r_resolved, (long)st_buf, AT_SYMLINK_NOFOLLOW) == 0) {
+                        if ((st_buf[STAT_MODE_IDX] & 0170000) == 0040000) data.flags |= NM_DIR;
                         #if defined(__aarch64__)
-                            data.real_dev = st_large[0]; 
-                            data.real_ino = st_large[1];
+                            data.real_ino = ((unsigned long long *)st_buf)[1];
                         #else
-                            data.real_dev_lo = ((unsigned int*)stat_buf)[0]; 
-                            data.real_ino_lo = ((unsigned int*)stat_buf)[3];
+                            data.real_ino = ((unsigned int*)st_buf)[3];
                         #endif
                     }
 
@@ -344,7 +224,7 @@ void c_main(long *sp) {
                     if (res < 0) exit_code = -res;
                 }
             }
-            ioctl_code = 0; // prevent dual execution later
+            ioctl_code = 0; 
             break;
         }
         case 'b':
@@ -381,19 +261,7 @@ void c_main(long *sp) {
             char *curr = (char *)ioctl_arg;
             char *end = curr + res;
             if (argc > 2 && argv[2][0] == 'j') {
-                char *json_out_buf = end;
-                int json_out_pos = 0;
-
-                #define append_const(str) do { \
-                    int _l = sizeof(str) - 1; \
-                    for (int _i = 0; _i < _l; _i++) json_out_buf[json_out_pos++] = (str)[_i]; \
-                } while(0)
-
-                #define append_str(s, l) do { \
-                    for (int _i = 0; _i < (l); _i++) json_out_buf[json_out_pos++] = (s)[_i]; \
-                } while(0)
-
-                append_const("[\n");
+                sys3(SYS_WRITE, 1, (long)"[\n", 2);
 
                 int is_first = 1;
                 while (curr < end) {
@@ -406,26 +274,20 @@ void c_main(long *sp) {
                     char *r_path = curr + 4 + v_len;
                     int r_len = total_len - 4 - v_len;
 
-                    if (!is_first) append_const(",\n");
+                    if (!is_first) sys3(SYS_WRITE, 1, (long)",\n", 2);
                     is_first = 0;
 
-                    append_const("  {\n    \"virtual\": \"");
-                    append_str(v_path, v_len - 1);
-                    
-                    append_const("\",\n    \"real\": \"");
+                    sys3(SYS_WRITE, 1, (long)"  {\n    \"virtual\": \"", 19);
+                    sys3(SYS_WRITE, 1, (long)v_path, v_len - 1);
+                    sys3(SYS_WRITE, 1, (long)"\",\n    \"real\": \"", 16);
                     if (r_len > 1) {
-                        append_str(r_path, r_len - 1);
+                        sys3(SYS_WRITE, 1, (long)r_path, r_len - 1);
                     }
-                    append_const("\"\n  }");
+                    sys3(SYS_WRITE, 1, (long)"\"\n  }", 5);
 
                     curr += total_len;
                 }
-                append_const("\n]\n");
-
-                sys3(SYS_WRITE, 1, (long)json_out_buf, json_out_pos);
-
-                #undef append_const
-                #undef append_str
+                sys3(SYS_WRITE, 1, (long)"\n]\n", 3);
             } else {
                 while (curr < end) {
                     unsigned short total_len = *(unsigned short *)curr;

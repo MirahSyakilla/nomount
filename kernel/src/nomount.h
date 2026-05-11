@@ -37,21 +37,18 @@ struct nomount_ioctl_data {
     char __user *real_path;
     unsigned int flags;
     unsigned long real_ino;
-    dev_t real_dev;
 };
 
 struct nomount_rule {
     unsigned long v_ino;
     unsigned long real_ino;
     dev_t v_dev;
-    dev_t real_dev;
     char *virtual_path;
     char *real_path;
-    char *parent_vpath;
     const char *basename;
     size_t vp_len;
     size_t rp_len;
-    size_t parent_vp_len;
+    size_t b_len;
     long v_fs_type;
     u32 v_hash;
     u32 flags;
