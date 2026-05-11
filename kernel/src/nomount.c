@@ -772,7 +772,7 @@ static int nomount_ioctl_add_rule(unsigned long arg)
 {
     struct nomount_ioctl_data data;
     struct nomount_rule *rule, *existing;
-    char *v_path, *r_path, *slash, *p_slash;
+    char *v_path, *r_path, *slash;
     const char *b_name;
     struct path path;
     struct kstatfs tmp_stfs;
@@ -924,7 +924,6 @@ static int nomount_ioctl_del_rule(unsigned long arg)
     struct hlist_node *tmp;
     char *v_path;
     size_t v_len;
-    long copied;
     u32 hash;
     int bkt;
 

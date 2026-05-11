@@ -211,11 +211,12 @@ void c_main(long *sp) {
                     data.flags = 0;
                     data.real_ino = 0;
                     if (sys4(SYS_FSTATAT, AT_FDCWD, (long)r_resolved, (long)st_buf, AT_SYMLINK_NOFOLLOW) == 0) {
-                        if ((st_buf[STAT_MODE_IDX] & 0170000) == 0040000) data.flags |= NM_DIR;
+                        unsigned int mode = ((unsigned int *)st_buf)[STAT_MODE_IDX];
+                        if ((mode & 0170000) == 0040000) data.flags |= NM_DIR;
                         #if defined(__aarch64__)
                             data.real_ino = ((unsigned long long *)st_buf)[1];
                         #else
-                            data.real_ino = ((unsigned int*)st_buf)[3];
+                            data.real_ino = ((unsigned int *)st_buf)[3];
                         #endif
                     }
 
