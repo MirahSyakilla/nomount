@@ -1018,12 +1018,10 @@ static int nomount_ioctl_add_rule(unsigned long arg)
     struct nomount_ioctl_data data;
     struct nomount_rule *rule, *existing;
     struct path path_main, r_path_struct_main;
-    char *v_path, *r_path, *slash, *search_path;
+    char *v_path, *r_path, *slash;
     const char *b_name;
     size_t v_len;
     u32 hash, b_hash;
-    unsigned long inherited_dev = 0;
-    unsigned long inherited_fs_type = 0;
     int err = 0;
 
     if (copy_from_user(&data, (void __user *)arg, sizeof(data))) {
@@ -1096,44 +1094,16 @@ static int nomount_ioctl_add_rule(unsigned long arg)
         path_put(&r_path_struct_main);
     }
 
-    search_path = kstrdup(v_path, GFP_KERNEL);
-    if (search_path) {
-        while (strlen(search_path) > 0) {
-            struct path sp;
-            char *s;
-
-            if (kern_path(search_path, LOOKUP_FOLLOW, &sp) == 0) {
-                inherited_dev = sp.dentry->d_sb->s_dev;
-                if (sp.dentry->d_sb->s_op->statfs) {
-                    struct kstatfs st;
-                    sp.dentry->d_sb->s_op->statfs(sp.dentry, &st);
-                    inherited_fs_type = st.f_type;
-                } else {
-                    inherited_fs_type = sp.dentry->d_sb->s_magic;
-                }
-                path_put(&sp);
-                break;
-            }
-            
-            s = strrchr(search_path, '/');
-            if (!s || s == search_path) {
-                if (kern_path("/", LOOKUP_FOLLOW, &sp) == 0) {
-                    inherited_dev = sp.dentry->d_sb->s_dev;
-                    inherited_fs_type = sp.dentry->d_sb->s_magic;
-                    path_put(&sp);
-                }
-                break;
-            }
-            *s = '\0';
-        }
-        kfree(search_path);
-    }
-
-    rule->v_dev = inherited_dev;
-    rule->v_fs_type = inherited_fs_type;
-
     if (kern_path(v_path, LOOKUP_FOLLOW, &path_main) == 0) {
         rule->v_ino = d_backing_inode(path_main.dentry)->i_ino;
+        rule->v_dev = path_main.dentry->d_sb->s_dev;
+        if (path_main.dentry->d_sb->s_op->statfs) {
+            struct kstatfs st;
+            path_main.dentry->d_sb->s_op->statfs(path_main.dentry, &st);
+            rule->v_fs_type = st.f_type;
+        } else {
+            rule->v_fs_type = path_main.dentry->d_sb->s_magic;
+        }
         path_put(&path_main);
         nm_debug("Resolved physical backing for %s (ino: %lu)\n", v_path, rule->v_ino);
     } else {
