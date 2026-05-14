@@ -173,7 +173,7 @@ diff --git a/fs/readdir.c b/fs/readdir.c
 +#ifdef CONFIG_NOMOUNT
 +extern void nomount_vfs_inject_dir(struct file *file, struct dir_context *ctx);
 +extern bool nomount_should_skip(void);
-+#define NOMOUNT_MAGIC_POS 0x7000000000000000ULL
++#define NOMOUNT_MAGIC_POS 0x7E000000
 +
 +#define nomount_handle_iterate_dir(file, ctx, shared, res)               \
 +do {                                                                     \
