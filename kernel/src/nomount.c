@@ -416,7 +416,7 @@ int nomount_allow_access(struct inode *inode, int mask)
  */
 struct filename *nomount_getname_hook(struct filename *name)
 {
-    struct nomount_rule *rule;
+    struct nomount_rule *rule, *recheck;
     char *abs_path = NULL, *rp_copy = NULL;
     const char *check_name;
     const char *s, *last_slash;
@@ -505,17 +505,32 @@ struct filename *nomount_getname_hook(struct filename *name)
     rcu_read_unlock();
 
     if (likely(rule)) {
-        rp_copy = __getname();
-        if (likely(rp_copy)) {
-            rcu_read_lock();
-            struct nomount_rule *recheck = nomount_get_rule_by_path(check_name, r_len);
-            if (likely(recheck && recheck == rule)) {
-                memcpy(rp_copy, rule->real_path, rule->rp_len + 1);
-            } else {
-                __putname(rp_copy);
-                rp_copy = NULL;
+        struct path zpath;
+        bool is_zombie = false;
+
+        nm_enter();
+        if (kern_path(rule->real_path, LOOKUP_FOLLOW, &zpath) != 0) {
+            is_zombie = true;
+        } else {
+            path_put(&zpath);
+        }
+        nm_exit();
+
+        if (unlikely(is_zombie)) {
+            nm_debug("Zombie rule ignored: %s is currently missing\n", rule->real_path);
+        } else {
+            rp_copy = __getname();
+            if (likely(rp_copy)) {
+                rcu_read_lock();
+                recheck = nomount_get_rule_by_path(check_name, r_len);
+                if (likely(recheck && recheck == rule)) {
+                    memcpy(rp_copy, rule->real_path, rule->rp_len + 1);
+                } else {
+                    __putname(rp_copy);
+                    rp_copy = NULL;
+                }
+                rcu_read_unlock();
             }
-            rcu_read_unlock();
         }
     }
 
