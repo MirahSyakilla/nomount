@@ -13,6 +13,7 @@
 #include "nomount.h"
 
 static struct kmem_cache *nm_rule_cachep, *nm_dir_cachep, *nm_uid_cachep;
+const loff_t nomount_magic_pos = 0x7E000000;
 atomic_t nm_active_rules = ATOMIC_INIT(0);
 atomic_t nm_active_dirs = ATOMIC_INIT(0);
 #define nomount_num_rules() atomic_read(&nm_active_rules)
@@ -577,11 +578,11 @@ void nomount_vfs_inject_dir(struct file *file, struct dir_context *ctx)
 
     nm_enter();
 
-    if (ctx->pos >= NOMOUNT_MAGIC_POS && ctx->pos < NOMOUNT_MAGIC_POS + 100000) {
-        v_index = (unsigned long)(ctx->pos - NOMOUNT_MAGIC_POS);
+    if (ctx->pos >= nomount_magic_pos && ctx->pos < nomount_magic_pos + 100000) {
+        v_index = (unsigned long)(ctx->pos - nomount_magic_pos);
     } else {
         v_index = 0;
-        ctx->pos = NOMOUNT_MAGIC_POS;
+        ctx->pos = nomount_magic_pos;
     }
 
     down_read(&nomount_dirs_rwsem); 
@@ -600,7 +601,7 @@ void nomount_vfs_inject_dir(struct file *file, struct dir_context *ctx)
                     break; 
                 }
 
-                ctx->pos = NOMOUNT_MAGIC_POS + child->v_index + 1;
+                ctx->pos = nomount_magic_pos + child->v_index + 1;
             }
             break; 
         }

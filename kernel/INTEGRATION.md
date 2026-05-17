@@ -173,14 +173,14 @@ diff --git a/fs/readdir.c b/fs/readdir.c
 +#ifdef CONFIG_NOMOUNT
 +extern void nomount_vfs_inject_dir(struct file *file, struct dir_context *ctx);
 +extern bool nomount_should_skip(void);
-+#define NOMOUNT_MAGIC_POS 0x7E000000
++extern const loff_t nomount_magic_pos;
 +
 +#define nomount_handle_iterate_dir(file, ctx, shared, res)               \
 +do {                                                                     \
 +    loff_t _old_pos = (ctx)->pos;                                        \
 +    bool _nm_skip = nomount_should_skip();                               \
 +                                                                         \
-+    if ((ctx)->pos >= NOMOUNT_MAGIC_POS && !_nm_skip) {                  \
++    if ((ctx)->pos >= nomount_magic_pos && !_nm_skip) {                  \
 +        (res) = 0;                                                       \
 +    } else {                                                             \
 +        if (shared)                                                      \
@@ -190,7 +190,7 @@ diff --git a/fs/readdir.c b/fs/readdir.c
 +    }                                                                    \
 +                                                                         \
 +    if ((res) >= 0 && !_nm_skip) {                                       \
-+        if ((ctx)->pos == _old_pos || (ctx)->pos >= NOMOUNT_MAGIC_POS) { \
++        if ((ctx)->pos == _old_pos || (ctx)->pos >= nomount_magic_pos) { \
 +            nomount_vfs_inject_dir((file), (ctx));                       \
 +        }                                                                \
 +    }                                                                    \

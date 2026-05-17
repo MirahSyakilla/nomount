@@ -13,7 +13,6 @@
 #define NOMOUNT_HASH_BITS  12
 #define NOMOUNT_UID_HASH_BITS 4
 #define NM_FLAG_IS_DIR        (1 << 7)
-#define NOMOUNT_MAGIC_POS 0x7E000000
 #define NOMOUNT_IOC_ADD_RULE    _IOW(NOMOUNT_MAGIC_CODE, 1, struct nomount_ioctl_data)
 #define NOMOUNT_IOC_DEL_RULE    _IOW(NOMOUNT_MAGIC_CODE, 2, struct nomount_ioctl_data)
 #define NOMOUNT_IOC_CLEAR_ALL   _IO(NOMOUNT_MAGIC_CODE,  3)
