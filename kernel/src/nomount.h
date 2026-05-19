@@ -119,30 +119,4 @@ enum {
 #define NM_FAMILY_POLICY(p) .policy = (p),
 #endif
 
-/*
- * Recursion tracking for nomount operations. 
- * We use a lockless, fixed-size array of atomic counters.
- * To minimize collisions in heavily threaded environments,
- * we hash the memory address of the task_struct (current) instead of the PID.
- */
-
-#define NM_RECURSION_BINS 4096
-static atomic_t nm_rec_counters[NM_RECURSION_BINS];
-
-static inline int nm_get_bin(void) {
-    return (hash_ptr(current, ilog2(NM_RECURSION_BINS))) & (NM_RECURSION_BINS - 1);
-}
-
-static inline void nm_enter(void) {
-    atomic_inc(&nm_rec_counters[nm_get_bin()]);
-}
-
-static inline void nm_exit(void) {
-    atomic_dec(&nm_rec_counters[nm_get_bin()]);
-}
-
-static inline bool nm_is_recursive(void) {
-    return atomic_read(&nm_rec_counters[nm_get_bin()]) > 5; // Threshold to detect recursion, can be tuned
-}
-
 #endif /* _LINUX_NOMOUNT_H */

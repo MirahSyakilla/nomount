@@ -24,6 +24,94 @@ atomic_t nm_active_dirs = ATOMIC_INIT(0);
 #define nm_warn(fmt, ...) printk(KERN_WARNING "NoMount: [WARN] " fmt, ##__VA_ARGS__)
 #define nm_err(fmt, ...)  printk(KERN_ERR "NoMount: [ERROR] " fmt, ##__VA_ARGS__)
 
+/*
+ * Recursion tracking for nomount operations.
+ */
+
+#define NM_REC_BITS 10
+#define NM_REC_BINS (1 << NM_REC_BITS) /* 1024 Bins */
+#define NM_REC_MASK (NM_REC_BINS - 1)
+
+struct nm_rec_slot {
+    unsigned long task_ptr; /* Task signature (usually the 'current' pointer) */
+    atomic_t depth;         /* Nested recursion depth counter */
+};
+
+/* Static memory pool isolated within the module. */
+static struct nm_rec_slot nm_slots[NM_REC_BINS];
+
+/* * Master function to find or claim a slot using lockless linear probing.
+ * Returns the slot owned by the task, or claims a new one if available.
+ */
+static inline struct nm_rec_slot *__nm_get_slot(unsigned long t) {
+    int idx = hash_ptr((void *)t, NM_REC_BITS);
+    int start = idx;
+
+    do {
+        /* Attempt to atomically claim the slot ONLY if it's completely empty (0) */
+        unsigned long owner = cmpxchg(&nm_slots[idx].task_ptr, 0, t);
+
+        /* Slot successfully claimed or we already owned it from a previous call */
+        if (owner == 0 || owner == t) {
+            return &nm_slots[idx];
+        }
+
+        /* Slot is owned by another thread. Linear probing to the next bin. */
+        idx = (idx + 1) & NM_REC_MASK;
+
+    } while (idx != start);
+
+    return NULL;
+}
+
+/* Marks the entry point for NoMount processing to track VFS recursion */
+static inline void nm_enter(void) {
+    struct nm_rec_slot *slot = __nm_get_slot((unsigned long)current);
+    if (likely(slot)) {
+        atomic_inc(&slot->depth);
+    }
+}
+
+/* Marks the exit point. Releases the slot entirely if depth reaches 0 */
+static inline void nm_exit(void) {
+    unsigned long t = (unsigned long)current;
+    struct nm_rec_slot *slot = __nm_get_slot(t);
+
+    if (likely(slot)) {
+        /* If depth drops to 0, release the slot for other threads. */
+        if (atomic_dec_and_test(&slot->depth)) {
+            cmpxchg(&slot->task_ptr, t, 0);
+        }
+    }
+}
+
+/* Evaluates if the current thread has exceeded the maximum allowed recursion depth */
+static inline bool nm_is_recursive(void) {
+    unsigned long t = (unsigned long)current;
+    int idx = hash_ptr((void *)t, NM_REC_BITS);
+    int start = idx;
+
+    do {
+        unsigned long owner = READ_ONCE(nm_slots[idx].task_ptr);
+
+        /* Found our exact slot. Evaluate the depth. */
+        if (owner == t) {
+            return atomic_read(&nm_slots[idx].depth) > 5;
+        }
+
+        /* If we hit an empty slot during probing, our thread is definitely not registered */
+        if (owner == 0) {
+            return false;
+        }
+
+        /* Keep probing forward */
+        idx = (idx + 1) & NM_REC_MASK;
+    } while (idx != start);
+
+    /* if the table collapsed, assume recursive to prevent infinite loops and panics */
+    return true;
+}
+
 /*** Verification & Compatibility Checks ***/
 
 /**
