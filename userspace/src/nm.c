@@ -176,8 +176,8 @@ struct nlattr {
 
 /* --- NETLINK ENGINE --- */
 static int nl_seq = 0;
-static char tx_buf[16384];
-static char rx_buf[16384];
+static char tx_buf[65536];
+static char rx_buf[65536];
 
 /* Initialize a new Netlink message */
 static struct nlmsghdr *init_msg(int type, int cmd, int flags) {
