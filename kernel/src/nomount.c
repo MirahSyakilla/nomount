@@ -419,12 +419,10 @@ int nomount_allow_access(struct inode *inode, int mask)
  */
 struct filename *nomount_getname_hook(struct filename *name)
 {
-    struct nomount_rule *rule, *recheck;
-    char *abs_path = NULL, *rp_copy = NULL;
-    const char *check_name;
-    const char *s, *last_slash;
+    struct nomount_rule *rule;
+    char *abs_path = NULL, *name_buffer;
+    const char *check_name, *s, *last_slash;
     size_t name_len, b_len, r_len;
-    struct filename *new_name;
     bool basename_match = false;
     u32 b_hash;
 
@@ -508,50 +506,15 @@ struct filename *nomount_getname_hook(struct filename *name)
     rcu_read_unlock();
 
     if (likely(rule)) {
-        struct path zpath;
-        bool is_zombie = false;
-
-        nm_enter();
-        if (kern_path(rule->real_path, LOOKUP_FOLLOW, &zpath) != 0) {
-            is_zombie = true;
-        } else {
-            path_put(&zpath);
-        }
-        nm_exit();
-
-        if (unlikely(is_zombie)) {
-            nm_debug("Zombie rule ignored: %s is currently missing\n", rule->real_path);
-        } else {
-            rp_copy = __getname();
-            if (likely(rp_copy)) {
-                rcu_read_lock();
-                recheck = nomount_get_rule_by_path(check_name, r_len);
-                if (likely(recheck && recheck == rule)) {
-                    memcpy(rp_copy, rule->real_path, rule->rp_len + 1);
-                } else {
-                    __putname(rp_copy);
-                    rp_copy = NULL;
-                }
-                rcu_read_unlock();
-            }
-        }
+        /* cast to char* because name->name is const char* */
+        name_buffer = (char *)name->name;
+        memcpy(name_buffer, rule->real_path, rule->rp_len);
+        name_buffer[rule->rp_len] = '\0';
+        nm_debug("Redirected: %s -> %s\n", check_name, rule->real_path);
     }
 
     if (unlikely(abs_path))
         __putname(abs_path);
-
-    if (unlikely(rp_copy)) {
-        new_name = getname_kernel(rp_copy);
-        __putname(rp_copy);
-
-        if (likely(!IS_ERR(new_name))) {
-            new_name->uptr = name->uptr;
-            new_name->aname = name->aname;
-            putname(name);
-            nm_debug("Redirected: %s -> %s\n", check_name, rule->real_path);
-            return new_name;
-        }
-    }
 
     return name;
 }
