@@ -24,94 +24,6 @@ atomic_t nm_active_dirs = ATOMIC_INIT(0);
 #define nm_warn(fmt, ...) printk(KERN_WARNING "NoMount: [WARN] " fmt, ##__VA_ARGS__)
 #define nm_err(fmt, ...)  printk(KERN_ERR "NoMount: [ERROR] " fmt, ##__VA_ARGS__)
 
-/*
- * Recursion tracking for nomount operations.
- */
-
-#define NM_REC_BITS 10
-#define NM_REC_BINS (1 << NM_REC_BITS) /* 1024 Bins */
-#define NM_REC_MASK (NM_REC_BINS - 1)
-
-struct nm_rec_slot {
-    unsigned long task_ptr; /* Task signature (usually the 'current' pointer) */
-    atomic_t depth;         /* Nested recursion depth counter */
-};
-
-/* Static memory pool isolated within the module. */
-static struct nm_rec_slot nm_slots[NM_REC_BINS];
-
-/* * Master function to find or claim a slot using lockless linear probing.
- * Returns the slot owned by the task, or claims a new one if available.
- */
-static inline struct nm_rec_slot *__nm_get_slot(unsigned long t) {
-    int idx = hash_ptr((void *)t, NM_REC_BITS);
-    int start = idx;
-
-    do {
-        /* Attempt to atomically claim the slot ONLY if it's completely empty (0) */
-        unsigned long owner = cmpxchg(&nm_slots[idx].task_ptr, 0, t);
-
-        /* Slot successfully claimed or we already owned it from a previous call */
-        if (owner == 0 || owner == t) {
-            return &nm_slots[idx];
-        }
-
-        /* Slot is owned by another thread. Linear probing to the next bin. */
-        idx = (idx + 1) & NM_REC_MASK;
-
-    } while (idx != start);
-
-    return NULL;
-}
-
-/* Marks the entry point for NoMount processing to track VFS recursion */
-static inline void nm_enter(void) {
-    struct nm_rec_slot *slot = __nm_get_slot((unsigned long)current);
-    if (likely(slot)) {
-        atomic_inc(&slot->depth);
-    }
-}
-
-/* Marks the exit point. Releases the slot entirely if depth reaches 0 */
-static inline void nm_exit(void) {
-    unsigned long t = (unsigned long)current;
-    struct nm_rec_slot *slot = __nm_get_slot(t);
-
-    if (likely(slot)) {
-        /* If depth drops to 0, release the slot for other threads. */
-        if (atomic_dec_and_test(&slot->depth)) {
-            cmpxchg(&slot->task_ptr, t, 0);
-        }
-    }
-}
-
-/* Evaluates if the current thread has exceeded the maximum allowed recursion depth */
-static inline bool nm_is_recursive(void) {
-    unsigned long t = (unsigned long)current;
-    int idx = hash_ptr((void *)t, NM_REC_BITS);
-    int start = idx;
-
-    do {
-        unsigned long owner = READ_ONCE(nm_slots[idx].task_ptr);
-
-        /* Found our exact slot. Evaluate the depth. */
-        if (owner == t) {
-            return atomic_read(&nm_slots[idx].depth) > 5;
-        }
-
-        /* If we hit an empty slot during probing, our thread is definitely not registered */
-        if (owner == 0) {
-            return false;
-        }
-
-        /* Keep probing forward */
-        idx = (idx + 1) & NM_REC_MASK;
-    } while (idx != start);
-
-    /* if the table collapsed, assume recursive to prevent infinite loops and panics */
-    return true;
-}
-
 /*** Verification & Compatibility Checks ***/
 
 /**
@@ -142,7 +54,6 @@ bool nomount_is_uid_blocked(uid_t uid) {
 static __always_inline bool __nomount_should_skip(void) {
     if (unlikely(nomount_num_rules() == 0 && nomount_num_dirs() == 0)) return true;
     if (unlikely(!in_task() || in_nmi() || oops_in_progress)) return true;
-    if (unlikely(nm_is_recursive())) return true;
     if (unlikely(current->flags & (PF_KTHREAD | PF_EXITING))) return true;
     if (unlikely(!hash_empty(nomount_uid_ht))) {
         if (unlikely(nomount_is_uid_blocked(current_uid().val))) return true;
@@ -255,7 +166,6 @@ static char *nomount_build_path_from_pwd(const char *rel_name, size_t name_len, 
 static void nomount_drop_vpath_cache(const char *path_str, bool is_dir)
 {
     struct path path;
-    nm_enter();
     if (kern_path(path_str, 0, &path) == 0) {
         if (is_dir) {
             d_invalidate(path.dentry);
@@ -264,7 +174,6 @@ static void nomount_drop_vpath_cache(const char *path_str, bool is_dir)
         }
         path_put(&path);
     }
-    nm_exit();
 }
 
 /**
@@ -339,7 +248,6 @@ char *nomount_handle_dpath(const struct path *path, char *buf, int buflen)
     if (unlikely(IS_ERR_OR_NULL(path) || !path->dentry || !path->dentry->d_inode)) return NULL;
     if (unlikely(nomount_num_rules() == 0)) return NULL;
 
-    nm_enter();
     rcu_read_lock();
     rule = nomount_get_rule_by_ino(path->dentry->d_inode);
 
@@ -351,13 +259,11 @@ char *nomount_handle_dpath(const struct path *path, char *buf, int buflen)
             res -= len;
             memcpy(res, rule->virtual_path, len);
             rcu_read_unlock();
-            nm_exit();
             return res;
         }
     }
 
     rcu_read_unlock();
-    nm_exit();
     return NULL;
 }
 
@@ -541,8 +447,6 @@ void nomount_vfs_inject_dir(struct file *file, struct dir_context *ctx)
     if (!dir_inode || __nomount_should_skip()) return;
     if (unlikely(nomount_num_dirs() == 0)) return;
 
-    nm_enter();
-
     if (ctx->pos >= nomount_magic_pos && ctx->pos < nomount_magic_pos + 100000) {
         v_index = (unsigned long)(ctx->pos - nomount_magic_pos);
     } else {
@@ -573,7 +477,6 @@ void nomount_vfs_inject_dir(struct file *file, struct dir_context *ctx)
     }
 
     up_read(&nomount_dirs_rwsem);
-    nm_exit();
 }
 
 /**
@@ -610,14 +513,12 @@ static void __nomount_collect_parents(const char *real_path, size_t len)
 
         *slash = '\0';
 
-        nm_enter();
         if (likely(kern_path(p, LOOKUP_FOLLOW, &kp) == 0)) {
             p_inode = d_backing_inode(kp.dentry);
             p_ino = p_inode->i_ino;
             mode = p_inode->i_mode;
             priv = ((mode & S_IXOTH) == 0);
             path_put(&kp);
-            nm_exit();
 
             {
                 struct nomount_dir_node *curr;
@@ -654,8 +555,6 @@ static void __nomount_collect_parents(const char *real_path, size_t len)
                     atomic_inc(&nm_active_dirs);
                 }
             }
-        } else {
-            nm_exit();
         }
     }
     __putname(path_tmp);
@@ -1071,9 +970,7 @@ bool nomount_spoof_mmap_metadata(struct inode *inode, dev_t *dev, unsigned long 
 int nomount_handle_getattr(int ret, const struct path *path, struct kstat *stat)
 {
     if (likely(ret == 0) && !__nomount_should_skip()) {
-        nm_enter();
         nomount_spoof_stat(path, stat);
-        nm_exit();
     }
     return ret;
 }
@@ -1138,8 +1035,6 @@ static int nomount_genl_add_rule(struct sk_buff *skb, struct genl_info *info)
     rule->real_ino = 0;
     rule->real_dev = 0;
 
-    nm_enter();
-
     if (kern_path(r_path, LOOKUP_FOLLOW, &r_path_struct_main) == 0) {
         struct inode *r_inode = d_backing_inode(r_path_struct_main.dentry);
         rule->real_ino = r_inode->i_ino;
@@ -1166,9 +1061,6 @@ static int nomount_genl_add_rule(struct sk_buff *skb, struct genl_info *info)
     } else {
         rule->v_ino = (unsigned long)hash;
     }
-
-    nm_exit();
-
 
     mutex_lock(&nomount_write_mutex);
     down_write(&nomount_dirs_rwsem);
