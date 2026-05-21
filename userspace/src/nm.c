@@ -64,7 +64,11 @@
 #endif
 
 /* --- UTILS --- */
+typedef unsigned char u8;
+typedef unsigned short u16;
+typedef unsigned int u32;
 typedef unsigned long size_t;
+typedef unsigned long long u64;
 #define PATH_MAX  4096
 #define NULL ((void *)0)
 
@@ -178,6 +182,7 @@ struct nlattr {
 static int nl_seq = 0;
 static char tx_buf[65536];
 static char rx_buf[65536];
+#define MAX_PAYLOAD (sizeof(tx_buf) - NLMSG_HDRLEN - NLMSG_ALIGN(sizeof(struct genlmsghdr)) - NLA_HDRLEN - 64)
 
 /* Initialize a new Netlink message */
 static struct nlmsghdr *init_msg(int type, int cmd, int flags) {
@@ -333,22 +338,48 @@ void c_main(long *sp) {
             long cwd_len = sys2(SYS_GETCWD, (long)cwd_buf, PATH_MAX);
             const char *cwd = (cwd_len > 0) ? cwd_buf : "/";
             exit_code = 0;
+            static char payload[MAX_PAYLOAD];
+            char *cursor = payload;
+            size_t max_payload = MAX_PAYLOAD - (PATH_MAX * 2) - 16;
+            int target_cmd = is_add ? NOMOUNT_CMD_ADD_RULE : NOMOUNT_CMD_DEL_RULE;
 
             for (int arg_idx = 2; arg_idx + step <= argc; arg_idx += step) {
                 int v_len = resolve_path(v_resolved, cwd, argv[arg_idx], PATH_MAX);
-                if (v_len == 0) continue;
+                if (v_len == 0) { exit_code = 3; continue; }
 
-                nlh = init_msg(nm_family, is_add ? NOMOUNT_CMD_ADD_RULE : NOMOUNT_CMD_DEL_RULE, req_flags);
-                add_attr(nlh, NOMOUNT_ATTR_VIRTUAL_PATH, v_resolved, v_len + 1);
-
+                int r_len = 0;
                 if (is_add) {
-                    int r_len = resolve_path(r_resolved, cwd, argv[arg_idx+1], PATH_MAX);
-                    if (r_len == 0) continue;
-                    add_attr(nlh, NOMOUNT_ATTR_REAL_PATH, r_resolved, r_len + 1);
-                    unsigned int flags = 0;
-                    add_attr(nlh, NOMOUNT_ATTR_FLAGS, &flags, sizeof(flags));
+                    r_len = resolve_path(r_resolved, cwd, argv[arg_idx+1], PATH_MAX);
+                    if (r_len == 0) { exit_code = 3; continue; }
                 }
 
+                int item_size = is_add ? (8 + v_len + r_len) : (2 + v_len);
+                if ((cursor - payload) + item_size > max_payload) {
+                    nlh = init_msg(nm_family, target_cmd, req_flags);
+                    add_attr(nlh, NOMOUNT_ATTR_PAYLOAD, payload, cursor - payload);
+                    long res = send_and_recv(fd, nlh);
+                    if (res < 0) exit_code = -res;
+                    cursor = payload;
+                }
+
+                u16 vp_len_u = (u16)v_len;
+                if (is_add) {
+                    u32 flags = 0;
+                    u16 rp_len_u = (u16)r_len;
+                    memcpy(cursor, &flags, 4); cursor += 4;
+                    memcpy(cursor, &vp_len_u, 2); cursor += 2;
+                    memcpy(cursor, &rp_len_u, 2); cursor += 2;
+                    memcpy(cursor, v_resolved, v_len); cursor += v_len;
+                    memcpy(cursor, r_resolved, r_len); cursor += r_len;
+                } else {
+                    memcpy(cursor, &vp_len_u, 2); cursor += 2;
+                    memcpy(cursor, v_resolved, v_len); cursor += v_len;
+                }
+            }
+
+            if (cursor > payload) {
+                nlh = init_msg(nm_family, target_cmd, req_flags);
+                add_attr(nlh, NOMOUNT_ATTR_PAYLOAD, payload, cursor - payload);
                 long res = send_and_recv(fd, nlh);
                 if (res < 0) exit_code = -res;
             }

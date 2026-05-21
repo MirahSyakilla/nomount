@@ -12,6 +12,7 @@
 
 #define NOMOUNT_VERSION    2
 #define NOMOUNT_HASH_BITS  12
+#define NM_CHILD_HASH_BITS   6
 #define NOMOUNT_UID_HASH_BITS 4
 #define NM_FLAG_IS_DIR        (1 << 7)
 
@@ -52,6 +53,7 @@ struct nomount_dir_node {
     struct hlist_node node;      
     struct list_head private_list;
     struct list_head children_names; 
+    DECLARE_HASHTABLE(children_ht, NM_CHILD_HASH_BITS);
     char *dir_path;              
     unsigned long dir_ino;
     u32 next_child_index;
@@ -61,11 +63,12 @@ struct nomount_dir_node {
 
 struct nomount_child_name {
     struct list_head list;
+    struct hlist_node hash_node;
     unsigned long fake_ino;
     u32 v_index;
     u16 name_len;
     u8 d_type;
-    char name[]; /* Flexible array: must be the last member! */
+    char name[256];
 };
 
 struct nomount_uid_node {
