@@ -327,23 +327,15 @@ struct filename *nomount_getname_hook(struct filename *name)
     b_hash = full_name_hash(NULL, check_name, b_len);
 
     rcu_read_lock();
-    if (unlikely(s[0] == '/' && current_uid().val >= AID_APP_START)) {
-        const char *p = s + name_len;
-        while (p > s) {
-            if (*p == '/') {
-                size_t sub_len = (p == s) ? 1 : (p - s);
-                u32 h = full_name_hash(NULL, s, sub_len);
-                struct nomount_dir_node *priv_dir;
-                hash_for_each_possible_rcu(nomount_private_dirs_ht, priv_dir, private_hash_node, h) {
-                    if (priv_dir->dir_hash == h &&
-                        priv_dir->dir_path_len == sub_len &&
-                        memcmp(priv_dir->dir_path, s, sub_len) == 0) {
-                        nm_debug("Access to private directory blocked: %.*s\n", (int)sub_len, s);
-                        goto out_unlock2;
-                    }
+    if (unlikely(s[0] == '/' && current_uid().val >= AID_APP_START && !list_empty(&nomount_private_dirs_list))) {
+        struct nomount_dir_node *priv_dir;
+        list_for_each_entry_rcu(priv_dir, &nomount_private_dirs_list, private_list) {
+            size_t len = priv_dir->dir_path_len;
+            if (s[1] == priv_dir->dir_path[1] && memcmp(s, priv_dir->dir_path, len) == 0) {
+                if (unlikely(s[len] == '\0' || s[len] == '/')) {
+                    goto out_unlock2;
                 }
             }
-            p--;
         }
     }
 
@@ -453,6 +445,7 @@ static struct nomount_dir_node* __nomount_get_or_create_dir(unsigned long ino)
     dir_node->dir_path_len = 0;
     dir_node->next_child_index = 0;
     INIT_LIST_HEAD(&dir_node->children_names);
+    INIT_LIST_HEAD(&dir_node->private_list);
     hash_init(dir_node->children_ht);
 
     hash_add_rcu(nomount_dirs_ht, &dir_node->node, ino);
@@ -490,9 +483,7 @@ static void __nomount_collect_parents(struct nomount_rule *rule, struct dentry *
                 dir_node->dir_path_len = strlen(r_tmp);
                 dir_node->dir_path = kmemdup_nul(r_tmp, dir_node->dir_path_len, GFP_KERNEL);
                 if (likely(dir_node->dir_path)) {
-                    u32 hash = full_name_hash(NULL, r_tmp, dir_node->dir_path_len);
-                    dir_node->dir_hash = hash;
-                    hash_add_rcu(nomount_private_dirs_ht, &dir_node->private_hash_node, hash);
+                    list_add_tail_rcu(&dir_node->private_list, &nomount_private_dirs_list);
                 }
             }
         }
@@ -1033,6 +1024,8 @@ static void __nomount_del_rule(const char *v_path, size_t v_len,
                         
                         if (list_empty(&dir->children_names)) {
                             hash_del_rcu(&dir->node);
+                            if (unlikely(dir->is_private))
+                                list_del_rcu(&dir->private_list);
                             atomic_dec(&nm_active_dirs);
                             if (atomic_read(&nm_active_dirs) == 0)
                                 static_branch_disable(&nomount_active_dirs);
@@ -1075,10 +1068,6 @@ static void __nomount_clear_all(void)
         hlist_add_head(&uid_node->node, &uid_victims);
     }
 
-    hash_for_each_safe(nomount_private_dirs_ht, bkt, hlist_tmp, dir_node, private_hash_node) {
-        hash_del_rcu(&dir_node->private_hash_node);
-    }
-
     hash_for_each_safe(nomount_dirs_ht, bkt, hlist_tmp, dir_node, node) {
         hash_del_rcu(&dir_node->node);
         list_for_each_entry_safe(child, tmp_child, &dir_node->children_names, list) {
@@ -1091,6 +1080,8 @@ static void __nomount_clear_all(void)
     atomic_set(&nm_active_dirs, 0);
     static_branch_disable(&nomount_active_rules);
     static_branch_disable(&nomount_active_dirs);
+
+    INIT_LIST_HEAD(&nomount_private_dirs_list);
 
     synchronize_rcu();
 
@@ -1447,7 +1438,6 @@ static int __init nomount_init(void) {
     hash_init(nomount_rules_by_v_ino);
     hash_init(nomount_dirs_ht);
     hash_init(nomount_basenames_ht);
-    hash_init(nomount_private_dirs_ht);
     hash_init(nomount_uid_ht);
 
     nm_rule_cachep = kmem_cache_create("nomount_rules", 
