@@ -5,7 +5,6 @@
 #include <linux/list.h>
 #include <linux/hashtable.h>
 #include <linux/atomic.h>
-#include <linux/rwsem.h>
 #include <net/sock.h>
 #include <net/genetlink.h>
 #include <linux/version.h>
@@ -13,7 +12,6 @@
 
 #define NOMOUNT_VERSION    2
 #define NOMOUNT_HASH_BITS  12
-#define NM_CHILD_HASH_BITS   6
 #define NOMOUNT_UID_HASH_BITS 4
 #define NM_FLAG_IS_DIR (1 << 1)
 
@@ -26,7 +24,6 @@ static DEFINE_HASHTABLE(nomount_uid_ht,            NOMOUNT_UID_HASH_BITS);
 static LIST_HEAD(nomount_rules_list);
 static LIST_HEAD(nomount_private_dirs_list);
 static DEFINE_MUTEX(nomount_write_mutex);
-static DECLARE_RWSEM(nomount_dirs_rwsem);
 
 struct nomount_rule {
     struct list_head list;
@@ -50,26 +47,28 @@ struct nomount_rule {
     u8  flags;
 };
 
-struct nomount_dir_node {
-    struct hlist_node node;
-    struct list_head private_list;
-    struct list_head children_names; 
-    DECLARE_HASHTABLE(children_ht, NM_CHILD_HASH_BITS);
-    char *dir_path;              
-    unsigned long dir_ino;
-    u32 next_child_index;
-    u16 dir_path_len;
-    bool is_private;
-};
-
 struct nomount_child_name {
-    struct list_head list;
-    struct hlist_node hash_node;
     unsigned long fake_ino;
-    u32 v_index;
     u16 name_len;
     u8 d_type;
     char name[256];
+};
+
+struct nm_child_array {
+    atomic_t refcnt;
+    u32 num_children;
+    struct rcu_head rcu;
+    struct nomount_child_name entries[]; /* Flexible array member */
+};
+
+struct nomount_dir_node {
+    struct hlist_node node;
+    struct list_head private_list;
+    struct nm_child_array __rcu *child_array; 
+    char *dir_path;
+    unsigned long dir_ino;
+    u16 dir_path_len;
+    bool is_private;
 };
 
 struct nomount_uid_node {
