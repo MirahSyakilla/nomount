@@ -120,7 +120,10 @@ static char *nomount_build_path_from_pwd(const char *rel_name, size_t name_len, 
 
     if (!page_buf) return NULL;
 
-    get_fs_pwd(current->fs, &pwd);
+    rcu_read_lock();
+    pwd = current->fs->pwd;
+    path_get(&pwd);
+    rcu_read_unlock();
     cwd_str = d_path(&pwd, page_buf, PATH_MAX);
     path_put(&pwd);
 
