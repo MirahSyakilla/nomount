@@ -112,10 +112,11 @@ static inline bool __nomount_is_traversal_allowed_rcu(struct inode *inode) {
  * Returns a pointer to the allocated path string on success, or NULL on failure.
  * Caller must free the returned buffer using __putname() after use the pointer.
  */
-static char *nomount_build_path_from_pwd(const char *rel_name, size_t name_len, size_t *out_len, const char **out_path) 
+static const char *nomount_build_path_from_pwd(const char *rel_name, size_t name_len, size_t *out_len, const char **out_path) 
 {
     struct path pwd;
-    char *cwd_str, *page_buf = __getname();
+    const char *page_buf = __getname();
+    char *end_ptr, *cwd_str;
     size_t dir_len;
 
     if (!page_buf) return NULL;
@@ -124,7 +125,7 @@ static char *nomount_build_path_from_pwd(const char *rel_name, size_t name_len, 
     pwd = current->fs->pwd;
     path_get(&pwd);
     rcu_read_unlock();
-    cwd_str = d_path(&pwd, page_buf, PATH_MAX);
+    cwd_str = d_path(&pwd, (char *)page_buf, PATH_MAX);
     path_put(&pwd);
 
     if (IS_ERR_OR_NULL(cwd_str)) {
@@ -134,8 +135,12 @@ static char *nomount_build_path_from_pwd(const char *rel_name, size_t name_len, 
 
     dir_len = strlen(cwd_str);
     if (likely(dir_len + name_len + 2 <= PATH_MAX)) {
-        char *end_ptr = page_buf + dir_len; 
-        if (dir_len > 0 && cwd_str[dir_len - 1] != '/') {
+        if (cwd_str != page_buf) {
+            memmove((char *)page_buf, cwd_str, dir_len);
+            cwd_str = (char *)page_buf;
+        }
+        end_ptr = cwd_str + dir_len;
+        if (dir_len > 0 && *(end_ptr - 1) != '/') {
             *end_ptr = '/'; end_ptr++; dir_len++;
         }
         memcpy(end_ptr, rel_name, name_len + 1);
@@ -293,8 +298,7 @@ int nomount_handle_permission(struct inode *inode, int mask)
 struct filename *nomount_handle_getname(struct filename *name)
 {
     struct nomount_rule *rule;
-    char *abs_path = NULL;
-    const char *check_name, *s, *last_slash;
+    const char *check_name, *s, *last_slash, *page_buf = NULL;
     size_t name_len, b_len, r_len;
     bool basename_match = false;
     u32 b_hash;
@@ -340,8 +344,8 @@ struct filename *nomount_handle_getname(struct filename *name)
     check_name = s;
     r_len = name_len;
     if (unlikely(s[0] != '/')) {
-        abs_path = nomount_build_path_from_pwd(s, name_len, &r_len, &check_name);
-        if (!abs_path) return name;
+        page_buf = nomount_build_path_from_pwd(s, name_len, &r_len, &check_name);
+        if (!page_buf) return name;
     }
 
     rcu_read_lock();
@@ -352,7 +356,7 @@ struct filename *nomount_handle_getname(struct filename *name)
         nm_debug("Redirected: %s -> %s\n", check_name, rule->real_path);
     }
     rcu_read_unlock();
-    if (abs_path) __putname(abs_path);
+    if (page_buf) __putname(page_buf);
     return name;
 
 out_unlock:
