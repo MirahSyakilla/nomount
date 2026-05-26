@@ -8,7 +8,6 @@
 #include "nomount.h"
 
 static struct kmem_cache *nm_rule_cachep, *nm_dir_cachep, *nm_uid_cachep;
-const loff_t nomount_magic_pos = 0x7E000000;
 atomic_t nm_active_rules = ATOMIC_INIT(0);
 atomic_t nm_active_dirs = ATOMIC_INIT(0);
 DEFINE_STATIC_KEY_FALSE(nomount_active_rules);
@@ -378,6 +377,7 @@ int nomount_handle_iterate_dir(struct file *file, struct dir_context *ctx)
     struct nomount_dir_node *curr_dir;
     struct nm_child_array *array = NULL;
     loff_t old_pos = ctx->pos;
+    loff_t nomount_magic_pos = 0x7000000000000000ULL;
     unsigned long v_index;
     int res = 0;
     u32 i;
@@ -392,6 +392,9 @@ int nomount_handle_iterate_dir(struct file *file, struct dir_context *ctx)
         return -ENOTDIR;
     }
 
+#ifdef CONFIG_COMPAT
+    if (in_compat_syscall()) nomount_magic_pos = 0x7E000000;
+#endif
     if (ctx->pos < nomount_magic_pos) {
         if (file->f_op->iterate_shared)
             res = file->f_op->iterate_shared(file, ctx);
