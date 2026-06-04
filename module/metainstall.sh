@@ -1,5 +1,22 @@
 ui_print "- Using NoMount metainstall"
 install_module
+
+handle_partition() {
+    if [ ! -e "$MODPATH/system/$1" ]; then
+        return
+    fi
+
+    if [ ! -e "$MODPATH/$1" ]; then
+        ui_print "- Handle partition: /$1"
+        mv -f "$MODPATH/system/$1" "$MODPATH/$1"
+        ln -sf "../$1" "$MODPATH/system/$1"
+    fi
+}
+
+handle_partition system_ext
+handle_partition product
+handle_partition odm
+
 ui_print "- Installation complete"
 
 metamodule_hot_install() {
