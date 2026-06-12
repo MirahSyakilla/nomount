@@ -16,11 +16,11 @@ void c_main(long *sp) {
         goto do_exit;
     }
 
-    int fd = sys3(SYS_SOCKET, AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
+    int fd = syscall(SYS_SOCKET, AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
     if (fd < 0) { exit_code = 2; goto do_exit; }
 
     struct sockaddr_nl local = { .nl_family = AF_NETLINK };
-    sys3(SYS_BIND, fd, (long)&local, sizeof(local));
+    syscall(SYS_BIND, fd, (long)&local, sizeof(local));
 
     int nm_family = get_nomount_family_id(fd);
     if (nm_family < 0) {
@@ -38,7 +38,7 @@ void c_main(long *sp) {
             int step = is_add ? 2 : 1;
             if (argc < 2 + step) goto do_exit;
 
-            long cwd_len = sys2(SYS_GETCWD, (long)cwd_buf, PATH_MAX);
+            long cwd_len = syscall(SYS_GETCWD, (long)cwd_buf, PATH_MAX);
             const char *cwd = (cwd_len > 0) ? cwd_buf : "/";
             static char payload[MAX_PAYLOAD];
             char *cursor = payload;
@@ -102,14 +102,14 @@ void c_main(long *sp) {
         case 'l': {
             nlh = init_msg(nm_family, NOMOUNT_CMD_GET_LIST, NLM_F_REQUEST | NLM_F_DUMP);
             struct sockaddr_nl dest = { .nl_family = AF_NETLINK };
-            sys6(SYS_SENDTO, fd, (long)nlh, nlh->nlmsg_len, 0, (long)&dest, sizeof(dest));
+            syscall(SYS_SENDTO, fd, (long)nlh, nlh->nlmsg_len, 0, (long)&dest, sizeof(dest));
 
             int is_json = (argc > 2 && argv[2][0] == 'j');
             if (is_json) print_str("[\n");
             int first = 1;
 
             while (1) {
-                long len = sys6(SYS_RECVFROM, fd, (long)rx_buf, RX_BUF_SIZE, 0, 0, 0);
+                long len = syscall(SYS_RECVFROM, fd, (long)rx_buf, RX_BUF_SIZE, 0, 0, 0);
                 if (len <= 0) break;
                 int stop = 0;
                 for (struct nlmsghdr *msg = (struct nlmsghdr *)rx_buf; NLMSG_OK(msg, len); msg = NLMSG_NEXT(msg, len)) {
@@ -152,6 +152,6 @@ void c_main(long *sp) {
 
 do_exit:
     if (fd >= 0) sys1(SYS_CLOSE, fd);
-    sys1(SYS_EXIT, exit_code);
+    syscall(SYS_EXIT, exit_code);
     __builtin_unreachable();
 }

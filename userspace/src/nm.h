@@ -21,10 +21,6 @@
         __asm__ __volatile__("svc 0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5) : "memory", "cc");
         return x0;
     }
-    #define sys1(n,a) sys6(n,a,0,0,0,0,0)
-    #define sys2(n,a,b) sys6(n,a,b,0,0,0,0)
-    #define sys3(n,a,b,c) sys6(n,a,b,c,0,0,0)
-    #define sys4(n,a,b,c,d) sys6(n,a,b,c,d,0,0)
     __attribute__((naked)) void _start(void) { __asm__ volatile("mov x0, sp\n bl c_main\n"); }
 
 #elif defined(__arm__)
@@ -49,14 +45,27 @@
         __asm__ __volatile__("svc 0" : "+r"(r0) : "r"(r7), "r"(r1), "r"(r2), "r"(r3), "r"(r4), "r"(r5) : "memory", "cc");
         return r0;
     }
-    #define sys1(n,a) sys6(n,a,0,0,0,0,0)
-    #define sys2(n,a,b) sys6(n,a,b,0,0,0,0)
-    #define sys3(n,a,b,c) sys6(n,a,b,c,0,0,0)
-    #define sys4(n,a,b,c,d) sys6(n,a,b,c,d,0,0)
     __attribute__((naked)) void _start(void) { __asm__ volatile("mov r0, sp\n bl c_main\n"); }
 #else
     #error "Arch not supported"
 #endif
+
+/* Helper macros to pad unused arguments with zeros */
+#define sys0(n)                sys6(n, 0, 0, 0, 0, 0, 0)
+#define sys1(n, a)             sys6(n, a, 0, 0, 0, 0, 0)
+#define sys2(n, a, b)          sys6(n, a, b, 0, 0, 0, 0)
+#define sys3(n, a, b, c)       sys6(n, a, b, c, 0, 0, 0)
+#define sys4(n, a, b, c, d)    sys6(n, a, b, c, d, 0, 0)
+#define sys5(n, a, b, c, d, e) sys6(n, a, b, c, d, e, 0)
+
+/* Internal macro to dispatch based on argument count */
+#define __GET_SYSCALL_MACRO(_1, _2, _3, _4, _5, _6, _7, NAME, ...) NAME
+
+/* * Unified syscall wrapper.
+ * It automatically expands to the correct sysX macro depending on how many
+ * arguments you provide (up to 6 arguments + the syscall number).
+ */
+#define syscall(...) __GET_SYSCALL_MACRO(__VA_ARGS__, sys6, sys5, sys4, sys3, sys2, sys1, sys0)(__VA_ARGS__)
 
 /* --- UTILS --- */
 typedef unsigned char u8;
@@ -86,7 +95,7 @@ size_t strlen(const char *s) {
     return len;
 }
 
-#define print_str(s) sys3(SYS_WRITE, 1, (long)s, strlen(s))
+#define print_str(s) syscall(SYS_WRITE, 1, (long)s, strlen(s))
 
 /* --- NETLINK DEFS --- */
 #define AF_NETLINK 16
@@ -223,10 +232,10 @@ static void parse_attrs(struct nlattr **tb, int max, struct nlattr *attr, int le
 /* Send packet and wait for ACK or Data */
 static int send_and_recv(int fd, struct nlmsghdr *nlh) {
     struct sockaddr_nl dest = { .nl_family = AF_NETLINK };
-    long res = sys6(SYS_SENDTO, fd, (long)nlh, nlh->nlmsg_len, 0, (long)&dest, sizeof(dest));
+    long res = syscall(SYS_SENDTO, fd, (long)nlh, nlh->nlmsg_len, 0, (long)&dest, sizeof(dest));
     if (res < 0) return res;
 
-    res = sys6(SYS_RECVFROM, fd, (long)rx_buf, RX_BUF_SIZE, 0, 0, 0);
+    res = syscall(SYS_RECVFROM, fd, (long)rx_buf, RX_BUF_SIZE, 0, 0, 0);
     if (res < 0) return res;
 
     struct nlmsghdr *rep = (struct nlmsghdr *)rx_buf;
