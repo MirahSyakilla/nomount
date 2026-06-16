@@ -45,7 +45,9 @@ const ICON_PATHS = {
     search: 'M380-320q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l224 224q11 11 11 28t-11 28q-11 11-28 11t-28-11L532-372q-30 24-69 38t-83 14Zm0-80q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z',
     settings: 'M433-80q-27 0-46.5-18T363-142l-9-66q-13-5-24.5-12T307-235l-62 26q-25 11-50 2t-39-32l-47-82q-14-23-8-49t27-43l53-40q-1-7-1-13.5v-27q0-6.5 1-13.5l-53-40q-21-17-27-43t8-49l47-82q14-23 39-32t50 2l62 26q11-8 23-15t24-12l9-66q4-26 23.5-44t46.5-18h94q27 0 46.5 18t23.5 44l9 66q13 5 24.5 12t22.5 15l62-26q25-11 50-2t39 32l47 82q14 23 8 49t-27 43l-53 40q1 7 1 13.5v27q0 6.5-2 13.5l53 40q21 17 27 43t-8 49l-48 82q-14 23-39 32t-50-2l-60-26q-11 8-23 15t-24 12l-9 66q-4 26-23.5 44T527-80h-94Zm7-80h79l14-106q31-8 57.5-23.5T639-327l99 41 39-68-86-65q5-14 7-29.5t2-31.5q0-16-2-31.5t-7-29.5l86-65-39-68-99 42q-22-23-48.5-38.5T533-694l-13-106h-79l-14 106q-31 8-57.5 23.5T321-633l-99-41-39 68 86 64q-5 15-7 30t-2 32q0 16 2 31t7 30l-86 65 39 68 99-42q22 23 48.5 38.5T427-266l13 106Zm42-180q58 0 99-41t41-99q0-58-41-99t-99-41q-59 0-99.5 41T342-480q0 58 40.5 99t99.5 41Zm-2-140Z',
     settings_suggest: 'm697-696-56-26q-12-5-12-18t12-18l56-26 26-56q5-12 18-12t18 12l26 56 56 26q12 5 12 18t-12 18l-56 26-26 56q-5 12-18 12t-18-12l-26-56Zm92 308-49-23q-6-3-6-9t6-9l49-23 23-49q3-6 9-6t9 6l23 49 49 23q6 3 6 9t-6 9l-49 23-23 49q-3 6-9 6t-9-6l-23-49ZM336-80q-15 0-26-10t-13-25l-8-59q-7-3-15-8t-13-10l-55 24q-14 6-28.5 1.5T155-185L91-297q-8-14-4.5-28.5T102-349l47-35v-32l-47-35q-12-9-15.5-23.5T91-503l64-112q8-14 22.5-18.5T206-632l55 24q5-5 13-10t15-8l8-59q2-15 13-25t26-10h130q15 0 26 10t13 25l8 59q7 3 15 8t13 10l55-24q14-6 28.5-1.5T647-615l64 112q8 14 4.5 28.5T700-451l-47 35v32l47 35q12 9 15.5 23.5T711-297l-64 112q-8 14-22.5 18.5T596-168l-55-24q-5 5-13 10t-15 8l-8 59q-2 15-13 25t-26 10H336Zm150-235q35-35 35-85t-35-85q-35-35-85-35t-85 35q-35 35-35 85t35 85q35 35 85 35t85-35ZM371-160h60l8-72q29-8 49.5-20.5T529-286l66 30 28-50-58-44q8-23 8-50t-8-50l58-44-28-50-66 30q-20-21-40.5-33.5T439-568l-8-72h-60l-8 72q-29 8-49.5 20.5T273-514l-66-30-28 50 58 44q-8 23-8.5 50t8.5 50l-58 44 28 50 66-30q20 21 40.5 33.5T363-232l8 72Zm30-240Z',
-    shield: 'M467-85q-6-1-12-3-135-45-215-166.5T160-516v-189q0-25 14.5-45t37.5-29l240-90q14-5 28-5t28 5l240 90q23 9 37.5 29t14.5 45v189q0 140-80 261.5T505-88q-6 2-12 3t-13 1q-7 0-13-1Zm13-79q104-33 172-132t68-220v-189l-240-90-240 90v189q0 121 68 220t172 132Zm0-316Z'
+    shield: 'M467-85q-6-1-12-3-135-45-215-166.5T160-516v-189q0-25 14.5-45t37.5-29l240-90q14-5 28-5t28 5l240 90q23 9 37.5 29t14.5 45v189q0 140-80 261.5T505-88q-6 2-12 3t-13 1q-7 0-13-1Zm13-79q104-33 172-132t68-220v-189l-240-90-240 90v189q0 121 68 220t172 132Zm0-316Z',
+    smartphone: 'M680-920H280c-44 0-80 36-80 80v720c0 44 36 80 80 80h400c44 0 80-36 80-80v-720c0-44-36-80-80-80Zm0 720H280v-600h400v600Zm-120 80h-160v-40h160v40Z',
+    arrow_drop_down: 'M480-360 280-560h400L480-360Z',
 };
 
 const FILLED_ICON_PATHS = {
@@ -67,33 +69,15 @@ function setIcon(icon, name, variant = getIconVariant(icon)) {
     if (!icon) return;
     const pathData = getIconPath(name, variant);
     if (!pathData) return;
-    if (
-        icon.dataset.icon === name
+
+    if (icon.dataset.icon === name
         && icon.dataset.iconVariant === variant
-        && icon.firstElementChild?.tagName.toLowerCase() === 'svg'
-    ) return;
-
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('viewBox', '0 -960 960 960');
-    svg.setAttribute('aria-hidden', 'true');
-
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', pathData);
-    svg.appendChild(path);
+        && icon.firstElementChild?.tagName.toLowerCase() === 'svg') return;
 
     icon.dataset.icon = name;
     icon.dataset.iconVariant = variant;
     icon.setAttribute('aria-hidden', 'true');
-    icon.replaceChildren(svg);
-}
-
-function createIconElement(name, variant = 'outline') {
-    const icon = document.createElement('md-icon');
-    icon.dataset.icon = name;
-    icon.dataset.iconVariant = variant;
-    icon.setAttribute('aria-hidden', 'true');
-    setIcon(icon, name, variant);
-    return icon;
+    icon.innerHTML = `<svg viewBox="0 -960 960 960" aria-hidden="true"><path d="${pathData}"/></svg>`;
 }
 
 function applyOfflineIcons(root = document) {
@@ -102,27 +86,6 @@ function applyOfflineIcons(root = document) {
         if (!name) return;
         setIcon(icon, name);
     });
-}
-
-let offlineIconsInitialized = false;
-function initOfflineIcons() {
-    if (offlineIconsInitialized) return;
-    offlineIconsInitialized = true;
-
-    applyOfflineIcons();
-    new MutationObserver(() => requestAnimationFrame(() => applyOfflineIcons()))
-        .observe(document.body || document.documentElement, {
-            attributeFilter: ['class'],
-            attributes: true,
-            childList: true,
-            subtree: true
-        });
-}
-
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initOfflineIcons, { once: true });
-} else {
-    initOfflineIcons();
 }
 
 const AVAILABLE_LOCALES = ['en', 'es'];
@@ -375,13 +338,6 @@ function renderEmptyState(container, face, text) {
 
     wrapper.append(faceEl, textEl);
     container.replaceChildren(wrapper);
-}
-
-function applyAppIconFallback(img) {
-    img.onerror = () => {
-        img.onerror = null;
-        img.src = APP_ICON_FALLBACK;
-    };
 }
 
 function syncSystemBarTheme() {
@@ -923,33 +879,21 @@ async function loadExclusions() {
             item.className = 'card setting-item';
             item.dataset.uid = uid;
 
-            const appInfo = document.createElement('div');
-            appInfo.className = 'exclusion-app';
+            item.innerHTML = `
+                <div class="exclusion-app">
+                    <img src="ksu://icon/${escapeHtml(pkg)}" class="app-icon-img" onerror="this.src='${APP_ICON_FALLBACK}'" />
+                    <div class="setting-text">
+                        <h3>${escapeHtml(label)}</h3>
+                        <p>${escapeHtml(pkg)}</p>
+                    </div>
+                </div>
+                <md-icon-button class="btn-delete" aria-label="Remove exclusion">
+                    <md-icon>delete</md-icon>
+                </md-icon-button>
+            `;
 
-            const icon = document.createElement('img');
-            icon.src = `ksu://icon/${pkg}`;
-            icon.className = 'app-icon-img';
-            applyAppIconFallback(icon);
-
-            const text = document.createElement('div');
-            text.className = 'setting-text';
-
-            const title = document.createElement('h3');
-            title.textContent = label;
-
-            const subtitle = document.createElement('p');
-            subtitle.textContent = pkg;
-
-            text.append(title, subtitle);
-            appInfo.append(icon, text);
-
-            const deleteButton = document.createElement('md-icon-button');
-            deleteButton.className = 'btn-delete';
-            deleteButton.setAttribute('aria-label', 'Remove exclusion');
-            deleteButton.appendChild(createIconElement('delete'));
-            deleteButton.onclick = () => removeExclusion(uid, label);
-
-            item.append(appInfo, deleteButton);
+            applyOfflineIcons(item);
+            item.querySelector('.btn-delete').onclick = () => removeExclusion(uid, label);
             fragment.appendChild(item);
         });
 
@@ -1065,40 +1009,17 @@ function renderNextAppBatch() {
         const item = document.createElement('div');
         item.className = 'app-item segment-card';
 
-        const icon = document.createElement('img');
-        icon.src = `ksu://icon/${app.packageName}`;
-        icon.className = 'app-icon-img';
-        icon.loading = 'lazy';
-        applyAppIconFallback(icon);
-
-        const details = document.createElement('div');
-        details.className = 'app-details';
-
-        const name = document.createElement('div');
-        name.className = 'app-name';
-        name.textContent = app.appLabel;
-
-        const pkg = document.createElement('div');
-        pkg.className = 'app-pkg';
-        pkg.textContent = app.packageName;
-
-        const meta = document.createElement('div');
-        meta.className = 'app-meta';
-
-        const uid = document.createElement('div');
-        uid.className = 'uid-label';
-        uid.textContent = `UID: ${app.uid}`;
-
-        meta.appendChild(uid);
-        if (app.isSystem) {
-            const chip = document.createElement('span');
-            chip.className = 'system-chip';
-            chip.textContent = 'SYS';
-            meta.appendChild(chip);
-        }
-
-        details.append(name, pkg);
-        item.append(icon, details, meta);
+        item.innerHTML = `
+            <img src="ksu://icon/${escapeHtml(app.packageName)}" class="app-icon-img" loading="lazy" onerror="this.src='${APP_ICON_FALLBACK}'" />
+            <div class="app-details">
+                <div class="app-name">${escapeHtml(app.appLabel)}</div>
+                <div class="app-pkg">${escapeHtml(app.packageName)}</div>
+            </div>
+            <div class="app-meta">
+                <div class="uid-label">UID: ${escapeHtml(app.uid)}</div>
+                ${app.isSystem ? '<span class="system-chip">SYS</span>' : ''}
+            </div>
+        `;
 
         item.addEventListener('click', async () => {
             if (item.dataset.busy === 'true') return;
@@ -1303,7 +1224,7 @@ async function refreshCurrentView() {
 
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
-    initOfflineIcons();
+    applyOfflineIcons();
     await initI18n();
 
     syncSystemBarTheme();

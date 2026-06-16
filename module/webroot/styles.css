@@ -305,17 +305,6 @@ md-icon svg {
     color: var(--md-sys-color-on-surface-variant);
 }
 
-.segment-svg {
-    width: 24px;
-    height: 24px;
-    fill: currentColor;
-}
-
-.device-phone-icon {
-    width: 26px;
-    height: 22px;
-}
-
 .status-text-col,
 .info-data {
     display: flex;
@@ -529,13 +518,13 @@ md-icon svg {
 .dropdown-arrow {
     width: 24px;
     height: 24px;
-    fill: var(--md-sys-color-on-surface-variant);
+    fcolor: var(--md-sys-color-on-surface-variant);
     transition: transform 150ms ease;
 }
 
 .custom-select-wrapper.open .dropdown-arrow {
     transform: rotate(180deg);
-    fill: var(--md-sys-color-primary);
+    color: var(--md-sys-color-primary);
 }
 
 .custom-select-menu {
