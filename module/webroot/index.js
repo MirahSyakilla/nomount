@@ -125,6 +125,177 @@ if (document.readyState === 'loading') {
     initOfflineIcons();
 }
 
+const AVAILABLE_LOCALES = ['en', 'es'];
+const LOCALE_NAMES = {
+    en: 'English',
+    es: 'Español'
+};
+const TRANSLATION_FILES = {
+    en: './locales/en.json',
+    es: './locales/es.json'
+};
+const DEFAULT_LOCALE = 'en';
+let activeLocale = DEFAULT_LOCALE;
+let translations = {};
+
+function normalizeLocale(locale) {
+    if (!locale) return DEFAULT_LOCALE;
+    return String(locale).trim().toLowerCase().replace('_', '-');
+}
+
+function resolveLocale(locale) {
+    const normalized = normalizeLocale(locale);
+    if (AVAILABLE_LOCALES.includes(normalized)) return normalized;
+    const primary = normalized.split('-')[0];
+    if (AVAILABLE_LOCALES.includes(primary)) return primary;
+    return DEFAULT_LOCALE;
+}
+
+function interpolate(text, replacements = {}) {
+    return String(text).replace(/{{\s*([^}]+)\s*}}/g, (_, name) => {
+        return String(replacements[name] ?? replacements[name.trim()] ?? '');
+    });
+}
+
+async function loadTranslations(locale) {
+    const resolved = resolveLocale(locale);
+    activeLocale = resolved;
+
+    try {
+        const response = await fetch(TRANSLATION_FILES[resolved]);
+        if (!response.ok) throw new Error('Translation file not available');
+        translations = await response.json();
+    } catch (e) {
+        console.warn('Could not load translation for', resolved, e);
+        if (resolved !== DEFAULT_LOCALE) {
+            return loadTranslations(DEFAULT_LOCALE);
+        }
+        translations = {};
+    }
+
+    document.documentElement.lang = activeLocale;
+}
+
+function translate(key, replacements = {}) {
+    const value = translations[key];
+    if (value !== undefined) {
+        return interpolate(value, replacements);
+    }
+    return interpolate(key, replacements);
+}
+
+function translateElement(el) {
+    const key = el.dataset.i18n;
+    if (!key) return;
+    const text = translate(key);
+    const attr = el.dataset.i18nAttr;
+    if (attr) {
+        el.setAttribute(attr, text);
+    }
+    if (el.tagName.toLowerCase() === 'input' && attr === 'placeholder') {
+        el.placeholder = text;
+    }
+    if (el.tagName.toLowerCase() === 'title') {
+        el.textContent = text;
+    }
+    if (!attr) {
+        el.textContent = text;
+    }
+}
+
+function translateDocument() {
+    document.querySelectorAll('[data-i18n]').forEach(el => translateElement(el));
+}
+
+function getStoredLocale() {
+    return localStorage.getItem('nm_locale');
+}
+
+function storeLocale(locale) {
+    localStorage.setItem('nm_locale', locale);
+}
+
+function getPreferredLocale() {
+    const stored = getStoredLocale();
+    if (stored) return stored;
+    const navigatorLocale = navigator.languages?.[0] || navigator.language || navigator.userLanguage;
+    return resolveLocale(navigatorLocale);
+}
+
+async function setAppLocale(locale) {
+    const resolved = resolveLocale(locale);
+    await loadTranslations(resolved);
+    translateDocument();
+    renderLanguagePicker();
+    storeLocale(resolved);
+
+    const activeView = getActiveView();
+    const activeViewId = activeView?.id;
+
+    Object.keys(viewLoadState).forEach((viewId) => {
+        viewLoadState[viewId] = viewId === activeViewId;
+    });
+
+    if (activeViewId && activeViewId !== 'view-options') {
+        await refreshCurrentView();
+    }
+}
+
+function createLanguageOption(locale) {
+    const option = document.createElement('option');
+    option.value = locale;
+    option.textContent = LOCALE_NAMES[locale] || locale;
+    option.selected = locale === activeLocale;
+    return option;
+}
+
+function renderLanguagePicker() {
+    const wrapper = document.getElementById('lang-select-wrapper');
+    const trigger = document.getElementById('lang-select-trigger');
+    const valueDisplay = document.getElementById('lang-select-value');
+    const menu = document.getElementById('lang-select-menu');
+    
+    if (!wrapper || !trigger || !valueDisplay || !menu) return;
+
+    menu.replaceChildren();
+
+    AVAILABLE_LOCALES.forEach(locale => {
+        const optionEl = document.createElement('div');
+        optionEl.className = 'custom-select-option';
+        if (locale === activeLocale) {
+            optionEl.classList.add('selected');
+            valueDisplay.textContent = LOCALE_NAMES[locale] || locale;
+        }
+        optionEl.textContent = LOCALE_NAMES[locale] || locale;
+        optionEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (locale !== activeLocale) {
+                setAppLocale(locale);
+                valueDisplay.textContent = LOCALE_NAMES[locale] || locale;
+            }
+            wrapper.classList.remove('open');
+        });
+        menu.appendChild(optionEl);
+    });
+
+    trigger.onclick = (e) => {
+        e.stopPropagation();
+        wrapper.classList.toggle('open');
+    };
+
+    if (!wrapper.dataset.listenerAttached) {
+        document.addEventListener('click', () => {
+            wrapper.classList.remove('open');
+        });
+        wrapper.dataset.listenerAttached = 'true';
+    }
+}
+
+async function initI18n() {
+    const locale = getPreferredLocale();
+    await setAppLocale(locale);
+}
+
 // Variables
 const ADB_DIR = "/data/adb";
 const MOD_DIR = `${ADB_DIR}/modules`;
@@ -239,10 +410,10 @@ function getHomeElements() {
 
 function applyHomeData(data, statsText) {
     const elements = getHomeElements();
-    if (elements.kernel) elements.kernel.textContent = data.kernelVer || "Unknown";
-    if (elements.device) elements.device.textContent = data.deviceModel || "Unknown";
-    if (elements.android) elements.android.textContent = data.androidInfo || "Unknown";
-    if (elements.statusLabel) elements.statusLabel.textContent = data.versionFull || "Unknown";
+    if (elements.kernel) elements.kernel.textContent = data.kernelVer || translate('unknown_value');
+    if (elements.device) elements.device.textContent = data.deviceModel || translate('unknown_value');
+    if (elements.android) elements.android.textContent = data.androidInfo || translate('unknown_value');
+    if (elements.statusLabel) elements.statusLabel.textContent = data.versionFull || translate('unknown_value');
     if (statsText && elements.stats) elements.stats.textContent = statsText;
 
     if (data.active) {
@@ -383,7 +554,7 @@ async function loadHome() {
             let jsonRaw = parts[6];
             if (!jsonRaw) jsonRaw = "[]";
             let activeModulesCount = 0;
-            let dVer = "Unknown";
+            let dVer = translate('unknown_value');
 
             try {
                 const rules = JSON.parse(jsonRaw);
@@ -405,7 +576,16 @@ async function loadHome() {
                 console.error("Error parsing rules in Home:", e);
             }
 
-            const [kVer, model, aRel, aSdk, mVer] = parts;
+            let [kVer, model, aRel, aSdk, mVer] = parts;
+            const unknownStr = translate('unknown_value');
+
+            if (!kVer || kVer === "Unknown") kVer = unknownStr;
+            if (!model || model === "Unknown") model = unknownStr;
+            if (!mVer || mVer === "Unknown" || mVer === "undefined") mVer = unknownStr;
+            if (!dVer || dVer === "Unknown" || dVer === "undefined") dVer = unknownStr;
+            if (!aRel || aRel === "Unknown" || aRel === "undefined") aRel = unknownStr;
+            if (!aSdk || aSdk === "Unknown" || aSdk === "undefined") aSdk = unknownStr;
+
             const androidInfo = `Android ${aRel} (API ${aSdk})`;
             const versionFull = `${mVer} (${dVer})`;
             const homeData = {
@@ -413,11 +593,14 @@ async function loadHome() {
                 deviceModel: model,
                 androidInfo: androidInfo,
                 versionFull: versionFull,
-                active: dVer && dVer !== "Unknown"
+                active: dVer && dVer !== translate('unknown_value')
             };
 
             requestAnimationFrame(() => {
-                applyHomeData(homeData, `${activeModulesCount} modules injecting`);
+                if (activeModulesCount === 1)
+                    applyHomeData(homeData, translate('module_injected_count'));
+                else
+                    applyHomeData(homeData, translate('modules_injected_count', { count: activeModulesCount }));
                 localStorage.setItem('nm_home_cache', JSON.stringify(homeData));
             });
         } catch (e) {
@@ -427,7 +610,7 @@ async function loadHome() {
 }
 
 function setActiveUI(title, label, box, icon) {
-    if (title) title.textContent = "Active";
+    if (title) title.textContent = translate('status_active');
     label?.classList.add('active');
     label?.classList.remove('inactive');
     box?.classList.add('active');
@@ -437,7 +620,7 @@ function setActiveUI(title, label, box, icon) {
 }
 
 function setInactiveUI(title, label, box, icon) {
-    if (title) title.textContent = "Inactive";
+    if (title) title.textContent = translate('status_inactive');
     label?.classList.add('inactive');
     label?.classList.remove('active');
     box?.classList.remove('active');
@@ -483,8 +666,7 @@ async function loadModules() {
         listContainer.replaceChildren();
 
         if (lines.length === 0) {
-            renderEmptyState(listContainer, '(._.)', 'No modules found');
-            return;
+                renderEmptyState(listContainer, '(._.)', translate('no_modules_found'));
         }
 
         const ruleCountByMod = {};
@@ -506,12 +688,12 @@ async function loadModules() {
             const fileCount = ruleCountByMod[modId] || 0;
             const isLoaded = fileCount > 0;
 
-            let status = "Inactive";
+            let statusKey = 'status_inactive';
             if (isLoaded) {
-                status = hasDisable ? "Loaded" : "Active";
+                statusKey = hasDisable ? 'status_loaded' : 'status_active';
             } else {
-                if (hasDisable) status = "Disabled";
-                else if (hasSkipMount) status = "Skipped";
+                if (hasDisable) statusKey = 'status_disabled';
+                else if (hasSkipMount) statusKey = 'status_skipped';
             }
 
             return [modId, {
@@ -519,7 +701,7 @@ async function loadModules() {
                 hasDisable,
                 hasSkipMount,
                 isLoaded,
-                status,
+                statusKey,
                 fileCount,
             }];
         });
@@ -532,14 +714,14 @@ async function loadModules() {
                     const card = document.createElement('div');
                     card.className = 'card module-card';
                     card.dataset.moduleId = modId;
-                    const actionLabel = data.isLoaded ? 'hot unload' : 'hot load';
+                    const actionLabel = data.isLoaded ? translate('modules_hot_unload') : translate('modules_hot_load');
                     card.innerHTML = `
                         <div class="module-header">
                             <div class="module-info">
                                 <h3>${escapeHtml(data.realName)}</h3>
-                                <p>Status: ${escapeHtml(data.status)}</p>
+                                <p>${escapeHtml(translate('status_label'))}: ${escapeHtml(translate(data.statusKey))}</p>
                                 <div class="file-count">
-                                    <span>Injected: ${data.fileCount} files</span>
+                                    <span>${escapeHtml(translate('modules_injected_files', { count: data.fileCount }))}</span>
                                 </div>
                             </div>
                             <md-switch id="switch-${modId}" aria-label="Toggle module" ${!data.hasDisable ? 'selected' : ''}></md-switch>
@@ -595,7 +777,7 @@ async function loadModules() {
                     setTimeout(processEntries, 8);
                 } else {
                     if (listContainer.children.length === 0) {
-                        renderEmptyState(listContainer, '(._.)', 'No modules found');
+                        renderEmptyState(listContainer, '(._.)', translate('no_modules_found'));
                     }
                 }
             });
@@ -774,7 +956,7 @@ async function loadExclusions() {
         requestAnimationFrame(() => {
             if (loadId !== exclusionsLoadId) return;
             if (blockedUids.length === 0) {
-                renderEmptyState(listContainer, '(._.)', 'No exclusions yet');
+                renderEmptyState(listContainer, '(._.)', translate('no_exclusions_yet'));
                 return;
             }
 
@@ -782,8 +964,8 @@ async function loadExclusions() {
         });
     } catch (e) {
         console.error(e);
-        renderTextState(listContainer, 'error-message', 'Error loading exclusions');
-        showToast("Error loading exclusions");
+        renderTextState(listContainer, 'error-message', translate('error_loading_exclusions'));
+        showToast(translate('error_loading_exclusions'));
     }
 }
 
@@ -837,7 +1019,7 @@ async function openAppSelector() {
         };
 
     } catch (e) {
-        renderTextState(container, 'error-message', `Error: ${e.message}`);
+        renderTextState(container, 'error-message', `${translate('load_failed')}: ${e.message}`);
         console.error(e);
     }
 }
@@ -872,7 +1054,7 @@ function renderNextAppBatch() {
     if (batch.length === 0) {
         if (listObserver) listObserver.disconnect();
         if (appListRenderIndex === 0) {
-            renderEmptyState(container, '(._.)', 'No apps found');
+            renderEmptyState(container, '(._.)', translate('no_apps_found'));
         }
         return;
     }
@@ -939,8 +1121,8 @@ function renderNextAppBatch() {
 }
 
 async function removeExclusion(uid, name) {
-    if (!isValidUid(uid)) return showToast("Invalid UID");
-    showToast(`Unblocking ${name}...`);
+    if (!isValidUid(uid)) return showToast(translate('invalid_uid'));
+    showToast(translate('unblocking_name', { name }));
     try {
         const cat = await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`);
         const remainingUids = parseUidList(cat.stdout).filter(line => line !== String(uid));
@@ -951,19 +1133,19 @@ async function removeExclusion(uid, name) {
         const unblockRes = await exec(`${NM_BIN} unblock ${uid}`);
         if (unblockRes.errno !== 0) {
             console.warn("Runtime unblock failed:", unblockRes.stderr);
-            showToast("Removed; runtime unblock failed");
+            showToast(translate('blocked_saved'));
         }
 
         await loadExclusions();
     } catch (e) {
         console.error("Error unblocking:", e);
-        showToast("Error unblocking");
+        showToast(translate('error_unblocking'));
         await loadExclusions();
     }
 }
 
 async function addExclusion(uid, name) {
-    if (!isValidUid(uid)) return showToast("Invalid UID");
+    if (!isValidUid(uid)) return showToast(translate('invalid_uid'));
     const uidString = String(uid);
     try {
         const cat = await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`);
@@ -978,15 +1160,15 @@ async function addExclusion(uid, name) {
         const blockRes = await exec(`${NM_BIN} block ${uidString}`);
         if (blockRes.errno !== 0) {
             console.warn("Runtime block failed:", blockRes.stderr);
-            showToast("Saved; runtime block failed");
+            showToast(translate('blocked_saved'));
         } else {
-            showToast(alreadyBlocked ? "Already blocked" : `Blocked: ${name}`);
+            showToast(alreadyBlocked ? translate('blocked_already') : translate('blocked', { name }));
         }
 
         await loadExclusions();
     } catch (e) {
         console.error("Error blocking:", e);
-        showToast("Error blocking");
+        showToast(translate('error_blocking'));
         await loadExclusions();
     }
 }
@@ -1016,15 +1198,15 @@ async function loadOptions() {
 
     if (btnClear) {
         btnClear.onclick = () => {
-            showToast("Clearing all rules...");
+            showToast(translate('clear_rules_toast'));
             (async () => {
                 try {
                     await exec(`${NM_BIN} clear`);
-                    showToast("All rules cleared!");
+                    showToast(translate('clear_rules_done'));
                     loadModules();
                     loadExclusions();
                 } catch (e) {
-                    showToast("Clear failed");
+                    showToast(translate('save_failed'));
                 }
             })();
         };
@@ -1088,7 +1270,7 @@ function initPullToRefresh() {
                 await refreshCurrentView();
                 await new Promise(r => setTimeout(r, 400));
             } catch (e) {
-                showToast("Refresh failed");
+                showToast(translate('refresh_failed'));
             } finally {
                 resetIndicator();
             }
@@ -1120,8 +1302,10 @@ async function refreshCurrentView() {
 }
 
 // Init
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     initOfflineIcons();
+    await initI18n();
+
     syncSystemBarTheme();
     initNavigation();
     initTopAppBar();
@@ -1141,6 +1325,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     viewLoadState['view-home'] = true;
     loadHome(); 
+
+    document.body.classList.remove('loading');
 
     (async () => {
         try {
