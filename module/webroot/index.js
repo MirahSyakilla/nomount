@@ -88,16 +88,18 @@ function applyOfflineIcons(root = document) {
     });
 }
 
-const AVAILABLE_LOCALES = ['en', 'es', 'id'];
+const AVAILABLE_LOCALES = ['en', 'es', 'id', 'zh'];
 const LOCALE_NAMES = {
     en: 'English',
     es: 'Español',
-    id: 'Bahasa Indonesia'
+    id: 'Bahasa Indonesia',
+    zh: '简体中文'
 };
 const TRANSLATION_FILES = {
     en: './locales/en.json',
     es: './locales/es.json',
-    id: './locales/id.json'
+    id: './locales/id.json',
+    zh: './locales/zh.json'
 };
 const DEFAULT_LOCALE = 'en';
 let activeLocale = DEFAULT_LOCALE;
