@@ -8,7 +8,6 @@
     <title>NoMount</title>
     <link rel="stylesheet" href="styles.css" type="text/css">
     <script src="index.js" type="module"></script>
-    <script src="mwc.js" type="module"></script>
 </head>
 <body class="loading">
     <div class="root_layout">
@@ -89,7 +88,12 @@
                             <h3 data-i18n="detailed_logging">Detailed Logging</h3>
                             <p data-i18n="detailed_logging_desc">Write verbose output to nomount.log</p>
                         </div>
-                        <md-switch id="setting-verbose" data-i18n="detailed_logging" data-i18n-attr="aria-label" aria-label="Detailed Logging"></md-switch>
+                        <label class="custom-switch" id="setting-verbose">
+                            <input type="checkbox" class="switch-input" aria-label="Detailed Logging">
+                            <span class="switch-track">
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
                     </div>
 
                     <div class="segment-card setting-item">
@@ -97,7 +101,12 @@
                             <h3 data-i18n="safe_mode">Safe Mode</h3>
                             <p data-i18n="safe_mode_desc">Disable injection on next boot</p>
                         </div>
-                        <md-switch id="setting-safemode" data-i18n="safe_mode" data-i18n-attr="aria-label" aria-label="Safe Mode"></md-switch>
+                        <label class="custom-switch" id="setting-safemode">
+                            <input type="checkbox" class="switch-input" aria-label="Safe Mode">
+                            <span class="switch-track">
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
                     </div>
 
                     <div class="segment-card setting-item" id="lang-setting-card">
@@ -116,9 +125,9 @@
                     </div>
                 </div>
 
-                <md-filled-tonal-button id="btn-clear-rules" data-i18n="clear_rules">
+                <button class="custom-tonal-btn error" id="btn-clear-rules" data-i18n="clear_rules">
                     Clear all rules
-                </md-filled-tonal-button>
+                </button>
             </div>
         </div>
 
@@ -142,9 +151,9 @@
     </div>
 
     <div id="fab-container">
-        <md-fab variant="primary" id="fab-add-exclusion" data-i18n="add_exclusion" data-i18n-attr="aria-label" aria-label="Add exclusion">
-            <md-icon slot="icon">add</md-icon>
-        </md-fab>
+        <button class="custom-fab" id="fab-add-exclusion" aria-label="Add exclusion">
+            <md-icon>add</md-icon>
+        </button>
     </div>
 
     <div id="app-selector-modal" class="modal-overlay">
@@ -155,11 +164,10 @@
                     <md-icon>close</md-icon>
                 </md-icon-button>
             </div>
-            
+
             <div class="search-box">
                 <md-icon>search</md-icon>
                 <input type="text" id="app-search-input" data-i18n="search_placeholder" data-i18n-attr="placeholder" placeholder="Search app or package...">
-
                 <md-icon-button id="btn-filter-toggle">
                     <md-icon>filter_list</md-icon>
                 </md-icon-button>
@@ -168,13 +176,22 @@
             <div id="filter-menu" class="filter-menu">
                 <div class="filter-option">
                     <span data-i18n="filter_show_system_apps">Show System Apps</span>
-                    <md-switch id="switch-system-apps" data-i18n="filter_show_system_apps" aria-label="Show System Apps"></md-switch>
+                    <label class="custom-switch" id="switch-system-apps">
+                        <input type="checkbox" class="switch-input" aria-label="Show System Apps">
+                        <span class="switch-track">
+                            <span class="switch-thumb"></span>
+                        </span>
+                    </label>
                 </div>
             </div>
-            
 
-            <div id="app-list-container" class="app-list">
-                <div class="loading-spinner" data-i18n="loading_apps">Loading apps...</div>
+            <div class="app-list-wrapper">
+                <div id="app-modal-refresh-indicator" class="pull-to-refresh-indicator">
+                    <md-icon>refresh</md-icon>
+                </div>
+                <div id="app-list-container" class="app-list">
+                    <div class="loading-spinner" data-i18n="loading_apps">Loading apps...</div>
+                </div>
             </div>
         </div>
     </div>
