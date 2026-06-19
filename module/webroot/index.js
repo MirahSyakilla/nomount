@@ -21,7 +21,7 @@ function showToast(msg) {
 }
 
 // i18n Engine
-const LOCALE_NAMES = { 
+const LOCALE_NAMES = {
     en: 'English',
     es: 'Español',
     id: 'Bahasa Indonesia',
@@ -30,25 +30,43 @@ const LOCALE_NAMES = {
 };
 let activeLocale = 'en', translations = {};
 
-const translate = (key, reps = {}) => String(translations[key] ?? key).replace(/{{\s*([^\s}]+(?:[ \t]+[^\s}]+)*)\s*}}/g, (_, n) => reps[n] ?? '');
+const TPL_RE = /{{\s*([^\s}]+(?:[ \t]+[^\s}]+)*)\s*}}/g;
+const translate = (key, reps) => {
+    const str = translations[key] ?? key;
+    return reps ? String(str).replace(TPL_RE, (_, n) => reps[n] ?? '') : str;
+};
+
+const translationsCache = {}; 
+let cachedI18nNodes = null;
 
 async function setAppLocale(locale) {
-    activeLocale = Object.keys(LOCALE_NAMES).includes(locale) ? locale : 'en';
-    try {
-        const response = await fetch(`./locales/${activeLocale}.json`);
-        translations = response.ok ? await response.json() : {};
-    } catch { translations = {}; }
+    activeLocale = locale in LOCALE_NAMES ? locale : 'en';
 
+    if (!translationsCache[activeLocale]) {
+        try {
+            const response = await fetch(`./locales/${activeLocale}.json`);
+            translationsCache[activeLocale] = response.ok ? await response.json() : {};
+        } catch { translationsCache[activeLocale] = {}; }
+    }
+
+    translations = translationsCache[activeLocale];
     document.documentElement.lang = activeLocale;
     localStorage.setItem('nm_locale', activeLocale);
-    document.querySelectorAll('[data-i18n]').forEach(el => {
+    if (!cachedI18nNodes) cachedI18nNodes = document.querySelectorAll('[data-i18n]');
+
+    cachedI18nNodes.forEach(el => {
         const text = translate(el.dataset.i18n);
-        el.dataset.i18nAttr ? el.setAttribute(el.dataset.i18nAttr, text) : (el.tagName.toLowerCase() === 'input' && el.placeholder !== undefined ? el.placeholder = text : el.textContent = text);
+        const targetAttr = el.dataset.i18nAttr;
+        
+        if (targetAttr) el.setAttribute(targetAttr, text);
+        else if ('placeholder' in el) el.placeholder = text;
+        else el.textContent = text;
     });
 
     renderLanguagePicker();
     const activeViewId = document.querySelector('.view-content.active')?.id;
-    Object.keys(viewLoadState).forEach(id => viewLoadState[id] = id === activeViewId);
+
+    for (const id in viewLoadState) viewLoadState[id] = id === activeViewId;
     if (activeViewId && activeViewId !== 'view-options') refreshCurrentView();
 }
 
@@ -59,7 +77,7 @@ function renderLanguagePicker() {
     if (!wrapper || !valueDisplay || !menu) return;
 
     menu.replaceChildren();
-    Object.keys(LOCALE_NAMES).forEach(loc => {
+    for (const loc in LOCALE_NAMES) {
         const optionEl = document.createElement('div');
         optionEl.className = `custom-select-option ${loc === activeLocale ? 'selected' : ''}`;
         optionEl.textContent = LOCALE_NAMES[loc];
@@ -67,19 +85,40 @@ function renderLanguagePicker() {
         
         optionEl.onclick = (e) => {
             e.stopPropagation();
-            if (loc !== activeLocale) setAppLocale(loc);
             wrapper.classList.remove('open');
+            if (loc !== activeLocale) setTimeout(() => setAppLocale(loc), 0);
         };
         menu.appendChild(optionEl);
-    });
+    }
 
-    document.getElementById('lang-select-trigger').onclick = (e) => { e.stopPropagation(); wrapper.classList.toggle('open'); };
     if (!wrapper.dataset.listenerAttached) {
+        document.getElementById('lang-select-trigger').onclick = (e) => { 
+            e.stopPropagation(); 
+            wrapper.classList.toggle('open'); 
+        };
         document.addEventListener('click', () => wrapper.classList.remove('open'));
         wrapper.dataset.listenerAttached = 'true';
     }
 }
 
+// Constants & Helpers
+const MOD_DIR = "/data/adb/modules";
+const NM_DATA = "/data/adb/nomount";
+const NM_BIN = "/data/adb/modules/nomount/bin/nm";
+const FILES = { verbose: `${NM_DATA}/.verbose`, disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list` };
+const APP_ICON_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzgwODA4MCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIvPjwvc3ZnPg==";
+const viewLoadState = { 'view-home': false, 'view-modules': false, 'view-exclusions': false, 'view-options': false };
+
+const parseUidList = text => [...new Set((text ?? '').split('\n').map(l => l.trim()).filter(Boolean))];
+const buildWriteUidListCmd = uids => {
+    const safe = [...new Set(uids)].filter(Boolean);
+    return safe.length ? `printf '%s\\n' ${safe} > ${FILES.exclusions}` : `: > ${FILES.exclusions}`;
+};
+const renderTextState = (el, cls, text) => { el.className = cls; el.textContent = text; };
+const renderEmptyState = (el, face, text) => el.innerHTML = `<div class="empty-list-placeholder empty-state"><div class="empty-face">${face}</div><div class="empty-text">${text}</div></div>`;
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
+// Icons
 customElements.define('md-icon', class extends HTMLElement {});
 const ICON_PATHS = {
     account_tree: 'M600-200v-40h-80q-33 0-56.5-23.5T440-320v-320h-80v40q0 33-23.5 56.5T280-520H160q-33 0-56.5-23.5T80-600v-160q0-33 23.5-56.5T160-840h120q33 0 56.5 23.5T360-760v40h240v-40q0-33 23.5-56.5T680-840h120q33 0 56.5 23.5T880-760v160q0 33-23.5 56.5T800-520H680q-33 0-56.5-23.5T600-600v-40h-80v320h80v-40q0-33 23.5-56.5T680-440h120q33 0 56.5 23.5T880-360v160q0 33-23.5 56.5T800-120H680q-33 0-56.5-23.5T600-200ZM160-760v160-160Zm520 400v160-160Zm0-400v160-160Zm0 160h120v-160H680v160Zm0 400h120v-160H680v160ZM160-600h120v-160H160v160Z',
@@ -108,51 +147,53 @@ const FILLED_ICON_PATHS = {
     shield: 'M467-85q-6-1-12-3-135-45-215-166.5T160-516v-189q0-25 14.5-45t37.5-29l240-90q14-5 28-5t28 5l240 90q23 9 37.5 29t14.5 45v189q0 140-80 261.5T505-88q-6 2-12 3t-13 1q-7 0-13-1Z'
 };
 
+const svgCache = {};
 function setIcon(icon, name, variant = 'outline') {
     if (!icon) return;
-    const pathData = variant === 'filled' ? (FILLED_ICON_PATHS[name] || ICON_PATHS[name]) : ICON_PATHS[name];
-    if (!pathData || (icon.dataset.icon === name && icon.dataset.iconVariant === variant && icon.firstElementChild?.tagName.toLowerCase() === 'svg')) return;
+    if (icon.dataset.icon === name && icon.dataset.iconVariant === variant) return;
+
+    const pathData = (variant === 'filled' ? FILLED_ICON_PATHS[name] : null) || ICON_PATHS[name];
+    if (!pathData) return;
+
+    const cacheKey = `${name}_${variant}`;
+    let svgMarkup = svgCache[cacheKey];
+    if (!svgMarkup) {
+        svgMarkup = `<svg viewBox="0 -960 960 960" aria-hidden="true"><path d="${pathData}"/></svg>`;
+        svgCache[cacheKey] = svgMarkup;
+    }
+
     icon.dataset.icon = name;
     icon.dataset.iconVariant = variant;
-    icon.setAttribute('aria-hidden', 'true');
-    icon.innerHTML = `<svg viewBox="0 -960 960 960" aria-hidden="true"><path d="${pathData}"/></svg>`;
+    if (!icon.hasAttribute('aria-hidden')) icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = svgMarkup;
 }
 
-function applyIcons(root = document) {
-    root.querySelectorAll?.('md-icon').forEach(icon => {
-        const name = icon.dataset.icon || icon.textContent.trim();
-        if (!name) return;
-        setIcon(icon, name);
+let cachedIconNodes = null;
+function applyIcons() {
+    if (!cachedIconNodes) cachedIconNodes = document.querySelectorAll('md-icon');
+    cachedIconNodes.forEach(icon => {
+        const name = icon.dataset.icon || (icon.textContent ? icon.textContent.trim() : null);
+        if (name) setIcon(icon, name);
     });
 }
 
-// Variables & Helpers
-const MOD_DIR = "/data/adb/modules";
-const NM_DATA = "/data/adb/nomount";
-const NM_BIN = `${MOD_DIR}/nomount/bin/nm`;
-const FILES = { verbose: `${NM_DATA}/.verbose`, disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list` };
-const APP_ICON_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzgwODA4MCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIvPjwvc3ZnPg==";
-const viewLoadState = { 'view-home': false, 'view-modules': false, 'view-exclusions': false, 'view-options': false };
+let cachedMetaTheme = null;
+let cachedSurfaceColor = null;
+function syncSystemBarTheme(isModalOpen = false) {
+    if (!cachedMetaTheme) cachedMetaTheme = document.querySelector('meta[name="theme-color"]');
+    if (!cachedMetaTheme) return;
 
-const shellQuote = v => "'" + String(v).replace(/'/g, "'\\''") + "'";
-function parseUidList(text) {
-    return [...new Set(String(text || '').split('\n').map(l => l.trim()).filter(Boolean))];
-}
-function buildWriteUidListCommand(uids) {
-    const safe = [...new Set(uids)].filter(Boolean);
-    return safe.length ? `printf '%s\\n' ${safe.join(' ')} > ${FILES.exclusions}` : `: > ${FILES.exclusions}`;
-}
-function renderTextState(container, className, text) {
-    container.innerHTML = `<div class="${className}">${text}</div>`;
-}
-function renderEmptyState(container, face, text) {
-    container.innerHTML = `<div class="empty-list-placeholder empty-state"><div class="empty-face">${face}</div><div class="empty-text">${text}</div></div>`;
-}
-
-function syncSystemBarTheme() {
-    const meta = document.querySelector('meta[name="theme-color"]');
-    const surface = getComputedStyle(document.documentElement).getPropertyValue('--md-sys-color-background').trim() || getComputedStyle(document.documentElement).getPropertyValue('--md-sys-color-surface').trim();
-    if (meta && surface) meta.setAttribute('content', surface);
+    if (isModalOpen) {
+        const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        cachedMetaTheme.setAttribute('content', isDark ? '#0a0a0c' : '#7a7a7a'); 
+    } else {
+        if (!cachedSurfaceColor) {
+            const cs = getComputedStyle(document.documentElement);
+            cachedSurfaceColor = cs.getPropertyValue('--md-sys-color-background').trim() || 
+                                 cs.getPropertyValue('--md-sys-color-surface').trim() || '#ffffff';
+        }
+        cachedMetaTheme.setAttribute('content', cachedSurfaceColor);
+    }
 }
 
 const homeUI = {};
@@ -171,15 +212,18 @@ function getHomeElements() {
 }
 
 const UI = {};
+let currentActiveViewId = 'view-home';
+let currentActiveViewTitle = '';
+
 function updateTopAppBar() {
     if (!UI.c) {
         UI.c = document.querySelector('.page-container');
         UI.bar = document.getElementById('top-app-bar');
         UI.title = document.getElementById('top-app-bar-title');
     }
-    const activeView = document.querySelector('.view-content.active');
-    if (!activeView || !['view-modules', 'view-exclusions'].includes(activeView.id)) {
-        UI.title.textContent = '';
+
+    if (!['view-modules', 'view-exclusions'].includes(currentActiveViewId)) {
+        if (UI.title.textContent !== '') UI.title.textContent = '';
         UI.bar.style.setProperty('--top-app-bar-opacity', '0');
         UI.bar.style.setProperty('--top-app-title-opacity', '0');
         UI.bar.classList.remove('visible', 'show-title');
@@ -188,7 +232,10 @@ function updateTopAppBar() {
     }
 
     const titleOpacity = Math.max(0, Math.min(1, (UI.c.scrollTop - 18) / 24));
-    UI.title.textContent = activeView.querySelector('.header-title')?.textContent?.trim() || '';
+
+    if (UI.title.textContent !== currentActiveViewTitle)
+        UI.title.textContent = currentActiveViewTitle;
+ 
     UI.bar.style.setProperty('--top-app-bar-opacity', UI.c.scrollTop > 0.5 ? '1' : '0');
     UI.bar.style.setProperty('--top-app-title-opacity', titleOpacity.toFixed(3));
     UI.bar.classList.toggle('visible', UI.c.scrollTop > 0.5);
@@ -216,18 +263,26 @@ function initNavigation() {
             });
             item.classList.add('active');
             const target = item.dataset.target;
+            
             views.forEach(v => v.classList.remove('active'));
-            document.getElementById(target).classList.add('active');
+            const targetView = document.getElementById(target);
+            targetView.classList.add('active');
+            
+            currentActiveViewId = target;
+            currentActiveViewTitle = targetView.querySelector('.header-title')?.textContent?.trim() || '';
+            
             updateTopAppBar();
             fab.classList.toggle('visible', target === 'view-exclusions');
 
-            if (!viewLoadState[target]) {
-                viewLoadState[target] = true;
-                if (target === 'view-home') loadHome();
-                else if (target === 'view-modules') loadModules();
-                else if (target === 'view-exclusions') loadExclusions();
-                else if (target === 'view-options') loadOptions();
-            }
+            setTimeout(() => {
+                if (!viewLoadState[target]) {
+                    viewLoadState[target] = true;
+                    if (target === 'view-home') loadHome();
+                    else if (target === 'view-modules') loadModules();
+                    else if (target === 'view-exclusions') loadExclusions();
+                    else if (target === 'view-options') loadOptions();
+                }
+            }, 0);
         });
     });
 }
@@ -263,8 +318,13 @@ async function loadHome() {
         } catch (e) { console.error("Error parsing rules:", e); }
 
         const unk = translate('unknown_value');
-        const pArray = Array.from({length: 6}, (_, i) => parts[i]);
-        const [kVer, model, aRel, aSdk, mVer, dVer] = pArray.map(p => (!p || p === "Unknown" || p === "undefined") ? unk : p);
+        const raw = parts.slice(0, 6);
+        const kVer = raw[0] || unk,
+              model = raw[1] || unk,
+              aRel = raw[2] || unk,
+              aSdk = raw[3] || unk,
+              mVer = raw[4] || unk,
+              dVer = raw[5] || unk;
 
         const homeData = {
             kernelVer: kVer, deviceModel: model,
@@ -306,8 +366,8 @@ async function loadModules() {
     const renderId = ++currentRenderId;
 
     try {
-        const activeRules = JSON.parse((await exec(`${NM_BIN} list json`)).stdout || "[]");
         const script = `
+            ${NM_BIN} list json; echo "|||"
             cd ${MOD_DIR}
             for mod in *; do
                 [ ! -d "$mod" ] || [ "$mod" = "nomount" ] || [ ! -f "$mod/module.prop" ] && continue
@@ -320,7 +380,12 @@ async function loadModules() {
             done
         `;
 
-        const lines = (await exec(script)).stdout.split('\n').filter(Boolean);
+        const { stdout } = await exec(script);
+        const [jsonPart, modulesPart] = stdout.split('|||');
+        
+        const activeRules = JSON.parse(jsonPart?.trim() || "[]");
+        const lines = (modulesPart || '').split('\n').filter(Boolean);
+        
         const ruleCountByMod = {};
         activeRules.forEach(r => {
             if (r?.real?.startsWith(MOD_DIR)) {
@@ -369,13 +434,15 @@ async function loadModules() {
 }
 
 async function loadModule(modId) {
-    const modPath = shellQuote(`${MOD_DIR}/${modId}`);
+    const modPath = `${MOD_DIR}/${modId}`;
+
     const script = `
-        cd ${modPath} || exit 0
-        find -L ${["system", "vendor", "product", "system_ext", "odm", "oem"].map(shellQuote).join(' ')} \\( -type f -o -type l \\) -exec sh -c '
+        cd "${modPath}" || exit 0
+        find -L system vendor product system_ext odm oem \\( -type f -o -type l \\) -exec sh -c '
             mod="$1"; shift
             for f do
                 printf "/%s\\0%s/%s\\0" "$f" "$mod" "$f"
+
                 case "$f" in
                     vendor/*|product/*|system_ext/*|odm/*|oem/*)
                         [ ! -e "$mod/system/$f" ] && [ ! -L "$mod/system/$f" ] && printf "/system/%s\\0%s/%s\\0" "$f" "$mod" "$f" ;;
@@ -383,18 +450,25 @@ async function loadModule(modId) {
                         [ ! -e "$mod/\${f#system/}" ] && [ ! -L "$mod/\${f#system/}" ] && printf "/%s\\0%s/%s\\0" "\${f#system/}" "$mod" "$f" ;;
                 esac
             done
-        ' _ ${modPath} {} + 2>/dev/null | xargs -0 -r -n 500 ${shellQuote(NM_BIN)} add
+        ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 500 ${NM_BIN} add
     `;
+    
     try { await exec(script); } catch (e) { throw e; }
 }
 
 async function unloadModule(modId) {
     try {
         const rules = JSON.parse((await exec(`${NM_BIN} list json`)).stdout || "[]");
-        const targets = rules.filter(r => r?.real?.startsWith(`${MOD_DIR}/${modId}/`)).map(r => r.virtual);
+        const targets = rules
+            .filter(r => r?.real?.startsWith(`${MOD_DIR}/${modId}/`))
+            .map(r => r.virtual);
+        if (targets.length === 0) return;
+        const cmdChunks = [];
         for (let i = 0; i < targets.length; i += 500) {
-            await exec(`printf '%s\\0' ${targets.slice(i, i + 500).map(shellQuote).join(' ')} | xargs -0 -r -n 500 ${shellQuote(NM_BIN)} del`);
+            const chunk = targets.slice(i, i + 500).join('\n');
+            cmdChunks.push(`cat << 'EOF' | tr '\\n' '\\0' | xargs -0 -r -n 500 ${NM_BIN} del\n${chunk}\nEOF`);
         }
+        await exec(cmdChunks.join('\n'));
     } catch (e) { throw e; }
 }
 
@@ -443,7 +517,6 @@ async function loadExclusions() {
     }
 }
 
-const delay = ms => new Promise(r => setTimeout(r, ms));
 async function ensureAppsCache(force = false) {
     if (!force && allAppsCache.length > 0) return;
     if (appLoadingPromise) {
@@ -495,23 +568,25 @@ async function ensureAppsCache(force = false) {
     return appLoadingPromise;
 }
 
-async function openAppSelector() {
+function openAppSelector() {
     const modal = document.getElementById('app-selector-modal'), 
           container = document.getElementById('app-list-container'), 
           searchInput = document.getElementById('app-search-input');
           
-    // Get the actual checkbox input inside the label wrapper, fallback to ID if it is the input itself
     const switchWrapper = document.getElementById('switch-system-apps');
     const sysSwitch = switchWrapper ? (switchWrapper.tagName === 'INPUT' ? switchWrapper : switchWrapper.querySelector('input')) : null;
     if (!modal) return;
 
     modal.classList.add('active');
+    syncSystemBarTheme(true);
     if (listObserver) listObserver.disconnect();
     document.getElementById('filter-menu').classList.remove('active'); 
     searchInput.value = '';
     if (sysSwitch) sysSwitch.checked = showSystemApps;
+
     document.getElementById('btn-close-modal').onclick = () => { 
         modal.classList.remove('active'); 
+        syncSystemBarTheme(false);
         if (listObserver) listObserver.disconnect(); 
     };
 
@@ -520,15 +595,17 @@ async function openAppSelector() {
         if (entries[0].isIntersecting) renderNextAppBatch(); 
     }, { root: container, rootMargin: '200px' });
 
-    try {
-        await ensureAppsCache();
-        filterAndRender();
-        searchInput.oninput = (e) => filterAndRender(e.target.value);
-        document.getElementById('btn-filter-toggle').onclick = () => document.getElementById('filter-menu').classList.toggle('active');
-        if (sysSwitch) sysSwitch.onchange = (e) => { showSystemApps = e.target.checked; filterAndRender(searchInput.value); };
-    } catch (e) { 
-        renderTextState(container, 'error-message', `${translate('load_failed') || 'Failed'}`); 
-    }
+    setTimeout(async () => {
+        try {
+            await ensureAppsCache();
+            filterAndRender();
+            searchInput.oninput = (e) => filterAndRender(e.target.value);
+            document.getElementById('btn-filter-toggle').onclick = () => document.getElementById('filter-menu').classList.toggle('active');
+            if (sysSwitch) sysSwitch.onchange = (e) => { showSystemApps = e.target.checked; filterAndRender(searchInput.value); };
+        } catch (e) { 
+            renderTextState(container, 'error-message', `${translate('load_failed') || 'Failed'}`); 
+        }
+    }, 250);
 }
 
 function filterAndRender(searchTerm = '') {
@@ -573,8 +650,8 @@ async function removeExclusion(uid, name) {
     showToast(translate('unblocking_name', { name }));
     try {
         const remainingUids = parseUidList((await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`)).stdout).filter(u => u !== String(uid));
-        if ((await exec(buildWriteUidListCommand(remainingUids))).errno !== 0) throw new Error("Failed to update");
-        if ((await exec(`${NM_BIN} unblock ${uid}`)).errno !== 0) showToast(translate('blocked_saved'));
+        await exec(`{ ${buildWriteUidListCmd(remainingUids)} && ${NM_BIN} unblock ${uid}; }`);
+        showToast(translate('blocked_saved'));
     } catch { showToast(translate('error_unblocking')); }
     await loadExclusions();
 }
@@ -584,9 +661,13 @@ async function addExclusion(uid, name) {
     try {
         const currentUids = parseUidList((await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`)).stdout);
         const alreadyBlocked = currentUids.includes(uidStr);
-        if (!alreadyBlocked && (await exec(buildWriteUidListCommand([...currentUids, uidStr]))).errno !== 0) throw new Error("Failed to update");
-        if ((await exec(`${NM_BIN} block ${uidStr}`)).errno !== 0) showToast(translate('blocked_saved'));
-        else showToast(alreadyBlocked ? translate('blocked_already') : translate('blocked', { name }));
+        if (!alreadyBlocked) {
+             await exec(`{ ${buildWriteUidListCmd([...currentUids, uidStr])} && ${NM_BIN} block ${uidStr}; }`);
+             showToast(translate('blocked_saved'));
+        } else {
+             await exec(`${NM_BIN} block ${uidStr}`);
+             showToast(translate('blocked_already'));
+        }
     } catch { showToast(translate('error_blocking')); }
     await loadExclusions();
 }
@@ -689,35 +770,43 @@ async function refreshCurrentView() {
 }
 
 function initDelegationAndAttach() {
-     document.getElementById('modules-list')?.addEventListener('change', async (e) => {
+     document.getElementById('modules-list')?.addEventListener('change', (e) => {
         const toggle = e.target.closest('.switch-input');
         if (toggle) {
             const labelContainer = toggle.closest('.custom-switch');
-            if (labelContainer.dataset.busy) return;
+            if (labelContainer.dataset.busy) {
+                e.preventDefault();
+                return;
+            }
             const modId = toggle.closest('.module-card').dataset.moduleId;
             labelContainer.dataset.busy = 'true';
             labelContainer.classList.add('switch-busy');
-            try {
-                if (toggle.checked) { await exec(`rm ${MOD_DIR}/${modId}/disable`); await loadModule(modId); }
-                else { await unloadModule(modId); await exec(`touch ${MOD_DIR}/${modId}/disable`); }
-            } finally {
-                await new Promise(r => setTimeout(r, 320));
-                labelContainer.classList.remove('switch-busy');
-                delete labelContainer.dataset.busy;
-                loadModules();
-            }
+            const isChecked = toggle.checked;
+            setTimeout(async () => {
+                try {
+                    if (isChecked) { await exec(`rm ${MOD_DIR}/${modId}/disable`); await loadModule(modId); }
+                    else { await unloadModule(modId); await exec(`touch ${MOD_DIR}/${modId}/disable`); }
+                } finally {
+                    await new Promise(r => setTimeout(r, 200));
+                    labelContainer.classList.remove('switch-busy');
+                    delete labelContainer.dataset.busy;
+                    loadModules();
+                }
+            }, 0);
         }
     });
 
-    document.getElementById('modules-list')?.addEventListener('click', async (e) => {
+    document.getElementById('modules-list')?.addEventListener('click', (e) => {
         const hotBtn = e.target.closest('.btn-hot-action');
         if (hotBtn && !hotBtn.disabled) {
             hotBtn.disabled = true;
             const card = hotBtn.closest('.module-card');
             const modId = card.dataset.moduleId;
             const isLoaded = hotBtn.classList.contains('unload');
-            try { isLoaded ? await unloadModule(modId) : await loadModule(modId); } 
-            finally { loadModules(); }
+            setTimeout(async () => {
+                try { isLoaded ? await unloadModule(modId) : await loadModule(modId); } 
+                finally { loadModules(); }
+            }, 0);
         }
     });
 
@@ -725,19 +814,40 @@ function initDelegationAndAttach() {
         const delBtn = e.target.closest('.btn-delete');
         if (delBtn) {
             const item = delBtn.closest('.setting-item');
-            removeExclusion(item.dataset.uid, item.dataset.label);
+            const uid = item.dataset.uid;
+            const label = item.dataset.label;
+            item.style.opacity = '0.5';
+            item.style.pointerEvents = 'none';
+            setTimeout(() => {
+                removeExclusion(uid, label);
+            }, 0);
         }
     });
 
-    document.getElementById('app-list-container')?.addEventListener('click', async (e) => {
+    document.getElementById('app-list-container')?.addEventListener('click', (e) => {
         const item = e.target.closest('.app-item');
         if (item && !item.dataset.busy) {
             item.dataset.busy = 'true';
-            await addExclusion(item.dataset.uid, item.dataset.label);
+            const uid = item.dataset.uid;
+            const label = item.dataset.label;
             if (listObserver) listObserver.disconnect();
             document.getElementById('app-selector-modal')?.classList.remove('active');
+            syncSystemBarTheme(false);
+            setTimeout(async () => {
+                await addExclusion(uid, label);
+            }, 50);
         }
     });
+
+    document.getElementById('app-selector-modal')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) {
+            e.currentTarget.classList.remove('active');
+            syncSystemBarTheme(false);
+            if (listObserver) listObserver.disconnect(); 
+        }
+    });
+
+    document.getElementById('fab-add-exclusion')?.addEventListener('click', openAppSelector);
 
     attachPullToRefresh('.page-container', '.pull-to-refresh-indicator', 90, async () => { await refreshCurrentView(); },
     () => {
@@ -752,6 +862,22 @@ function initDelegationAndAttach() {
     });
 }
 
+function initScrollListener() {
+    const pageContainer = document.querySelector('.page-container');
+    if (pageContainer) {
+        let isTicking = false;
+        pageContainer.addEventListener('scroll', () => {
+            if (!isTicking) {
+                window.requestAnimationFrame(() => {
+                    updateTopAppBar();
+                    isTicking = false;
+                });
+                isTicking = true;
+            }
+        }, { passive: true });
+    }
+}
+
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
     await setAppLocale((localStorage.getItem('nm_locale') || navigator.language || 'en').split('-')[0]);
@@ -759,9 +885,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     syncSystemBarTheme();
     initNavigation();
     initDelegationAndAttach();
-    document.querySelector('.page-container')?.addEventListener('scroll', () => requestAnimationFrame(updateTopAppBar), { passive: true });
+    initScrollListener();
     updateTopAppBar();
-    document.getElementById('fab-add-exclusion')?.addEventListener('click', openAppSelector);
     viewLoadState['view-home'] = true;
     loadHome();
     document.body.classList.remove('loading');
@@ -769,5 +894,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
         if (!viewLoadState['view-modules']) loadModules();
         if (!viewLoadState['view-exclusions']) loadExclusions();
+        if (!viewLoadState['view-options']) loadOptions();
     } catch {}
 });
