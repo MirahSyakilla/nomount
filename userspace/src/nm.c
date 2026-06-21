@@ -12,16 +12,16 @@ void c_main(long *sp) {
 
     if (argc < 2) {
         print_str("nm <command>\n");
-        goto do_exit_no_fd;
+        goto do_exit;
     }
 
-    int fd = syscall(SYS_SOCKET, AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
-    if (fd < 0) { exit_code = 2; goto do_exit_no_fd; }
+    int fd = sys3(SYS_SOCKET, AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
+    if (fd < 0) { exit_code = 2; goto do_exit; }
 
     int nm_family = -1;
     /* flags: 1 = REQUEST */
     if (do_nm_cmd(fd, 16, 3, 2, "nomount", 8, 1) > 0) { /* 16=CTRL, 3=GETFAMILY, 2=NAME */
-        unsigned short *fam_id = get_attr((void *)rx_buf, 1); /* 1=FAMILY_ID */
+        unsigned short *fam_id = get_attr(rx_buf, 1); /* 1=FAMILY_ID */
         if (fam_id) nm_family = *fam_id;
     }
     if (nm_family < 0) { exit_code = 3; goto do_exit; }
@@ -29,12 +29,12 @@ void c_main(long *sp) {
     char cmd = argv[1][0];
     if (cmd == 'a' || cmd == 'd') {
         int is_add = (cmd == 'a');
-        int step = is_add ? 2 : 1;
-        if (argc < 2 + step) goto do_exit;
+        int step = 1 + is_add;
+        if (argc < 2 + step) { exit_code = 0; goto do_exit; }
 
-        const char *cwd = (syscall(SYS_GETCWD, (long)cwd_buf, PATH_MAX) > 0) ? cwd_buf : "/";
+        const char *cwd = (sys3(SYS_GETCWD, (long)cwd_buf, PATH_MAX, 0) > 0) ? cwd_buf : "/";
         char *cursor = payload;
-        int target_cmd = is_add ? 2 : 3; /* 2=ADD_RULE, 3=DEL_RULE */
+        int target_cmd = 3 - is_add; /* 2=ADD_RULE, 3=DEL_RULE */
         exit_code = 0;
 
         for (int i = 2; i + step <= argc; i += step) {
@@ -51,11 +51,11 @@ void c_main(long *sp) {
 
             if ((cursor - payload) + 8 + v_len + r_len > MAX_PAYLOAD) {
                 /* 6=PAYLOAD, 5=REQ|ACK */
-                if (do_nm_cmd(fd, nm_family, target_cmd, 6, payload, cursor - payload, 5) < 0) exit_code = 1; 
+                exit_code |= (do_nm_cmd(fd, nm_family, target_cmd, 6, payload, cursor - payload, 5) < 0);
                 cursor = payload;
             }
 
-            *(unsigned short*)(cursor + (is_add ? 4 : 0)) = v_len;
+            *(unsigned short*)(cursor + (is_add << 2)) = v_len;
             if (is_add) {
                 *(unsigned int*)cursor = 0; 
                 *(unsigned short*)(cursor + 6) = r_len; 
@@ -68,39 +68,41 @@ void c_main(long *sp) {
             }
         }
 
-        if (cursor > payload) {
-            if (do_nm_cmd(fd, nm_family, target_cmd, 6, payload, cursor - payload, 5) < 0) exit_code = 1;
-        }
+        if (cursor > payload)
+            exit_code |= (do_nm_cmd(fd, nm_family, target_cmd, 6, payload, cursor - payload, 5) < 0);
+
         goto do_exit;
 
     } else if (cmd == 'b' || cmd == 'u') {
         if (argc < 3) goto do_exit;
         unsigned int uid = 0; const char *s = argv[2];
-        while (*s) uid = uid * 10 + (*s++ - '0');
+        while (*s) uid = (uid << 3) + (uid << 1) + (*s++ - '0');
         /* 5=ADD_UID, 6=DEL_UID, 4=ATTR_UID, 5=REQ|ACK */
-        if (do_nm_cmd(fd, nm_family, (cmd == 'b') ? 5 : 6, 4, &uid, 4, 5) >= 0) exit_code = 0; goto do_exit;
+        exit_code = (do_nm_cmd(fd, nm_family, 6 - (cmd == 'b'), 4, &uid, 4, 5) < 0);
+        goto do_exit;
 
     } else if (cmd == 'c') {
         /* 4=CLEAR_ALL, 5=REQ|ACK */
-        if (do_nm_cmd(fd, nm_family, 4, 0, (void *)0, 0, 5) >= 0) exit_code = 0; goto do_exit;
+        exit_code = (do_nm_cmd(fd, nm_family, 4, 0, (void *)0, 0, 5) < 0);
+        goto do_exit;
 
     } else if (cmd == 'v') {
         if (do_nm_cmd(fd, nm_family, 1, 0, (void *)0, 0, 5) > 0) { /* 1=GET_VERSION */
-            unsigned int *ver = get_attr((void *)rx_buf, 5); /* 5=ATTR_VERSION */
+            unsigned int *ver = get_attr(rx_buf, 5 /* ATTR_VERSION */);
             if (ver) {
-                char v_str[16]; char *p = v_str + 15;
-                unsigned int v = *ver;
-                *p-- = '\0'; *p-- = '\n';
-                do { *p-- = (v % 10) + '0'; v /= 10; } while (v);
-                print_str(p + 1);
-                exit_code = 0;
+                unsigned int v = *ver; char v_str[4] = {0};
+                unsigned char tens = ((v << 7) + (v << 6) + (v << 3) + (v << 2) + v) >> 11;
+                v = v - ((tens << 3) + (tens << 1));
+                v_str[0] = tens + '0'; v_str[1] = v + '0'; v_str[2] = '\n';
+                print_str(v_str);
+                exit_code = 0; goto do_exit;
             }
         }
 
     } else if (cmd == 'l') {
         unsigned int len = do_nm_cmd(fd, nm_family, 7, 0, (void *)0, 0, 0x301); /* 7=GET_LIST, 0x301=REQ|DUMP */
         int is_json = (argc > 2 && argv[2][0] == 'j');
-        int first = 1;
+        int offset = 2;
         if (is_json) print_str("[\n");
 
         while (len > 0) {
@@ -111,25 +113,20 @@ void c_main(long *sp) {
 
                 if (v && r) {
                     if (is_json) {
-                        print_str(first ? "  {\n    \"virtual\": \"" : ",\n  {\n    \"virtual\": \"");
-                        first = 0;
-                        print_str(v);
-                        print_str("\",\n    \"real\": \""); print_str(r);
-                        print_str("\"\n  }");
+                        print_str((const char *)",\n  {\n    \"virtual\": \"" + offset); offset = 0;
+                        print_str(v); print_str("\",\n    \"real\": \""); print_str(r); print_str("\"\n  }");
                     } else {
                         print_str(v); print_str(" -> "); print_str(r); print_str("\n");
                     }
                 }
             }
-            len = syscall(SYS_RECVFROM, fd, (long)rx_buf, RX_BUF_SIZE, 0, 0, 0);
+            len = sys3(SYS_READ, fd, (long)rx_buf, RX_BUF_SIZE);
         }
 list_done:
         if (is_json) print_str("\n]\n");
-        exit_code = 0; goto do_exit;
+        exit_code = 0;
     }
 
 do_exit:
-    syscall(SYS_CLOSE, fd);
-do_exit_no_fd:
-    syscall(SYS_EXIT, exit_code);
+    sys1(SYS_EXIT, exit_code);
 }
