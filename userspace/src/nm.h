@@ -36,6 +36,26 @@
         return r0;
     }
     __asm__( ".global _start\n" ".type _start, %function\n" "_start:\n" "    mov r0, sp\n" "    bl c_main\n");
+
+#elif defined(__x86_64__)
+    #define SYS_READ       0
+    #define SYS_WRITE      1
+    #define SYS_SOCKET     41
+    #define SYS_EXIT       60
+    #define SYS_GETCWD     79
+
+    __attribute__((always_inline)) static inline long sys1(long n, long a) {
+        register long rax asm("rax") = n; register long rdi asm("rdi") = a;
+        __asm__ __volatile__("syscall" : "+r"(rax) : "r"(rdi) : "rcx", "r11", "memory", "cc");
+        return rax;
+    }
+    __attribute__((always_inline)) static inline long sys3(long n, long a, long b, long c) {
+        register long rax asm("rax") = n; register long rdi asm("rdi") = a; register long rsi asm("rsi") = b; register long rdx asm("rdx") = c;
+        __asm__ __volatile__("syscall" : "+r"(rax) : "r"(rdi), "r"(rsi), "r"(rdx) : "rcx", "r11", "memory", "cc");
+        return rax;
+    }
+    __asm__( ".global _start\n" ".type _start, @function\n" "_start:\n" "    mov %rsp, %rdi\n" "    call c_main\n" );
+
 #else
     #error "Arch not supported"
 #endif
