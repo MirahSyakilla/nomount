@@ -10,8 +10,10 @@
 static struct kmem_cache *nm_rule_cachep, *nm_dir_cachep, *nm_uid_cachep;
 atomic_t nm_active_rules = ATOMIC_INIT(0);
 atomic_t nm_active_dirs = ATOMIC_INIT(0);
+atomic_t nm_active_uids = ATOMIC_INIT(0);
 DEFINE_STATIC_KEY_FALSE(nomount_active_rules);
 DEFINE_STATIC_KEY_FALSE(nomount_active_dirs);
+DEFINE_STATIC_KEY_FALSE(nomount_active_uids);
 
 /* logs */
 #define nm_debug(fmt, ...) printk(KERN_DEBUG "NoMount: [DEBUG] " fmt, ##__VA_ARGS__)
@@ -50,7 +52,7 @@ static __always_inline bool __nomount_should_skip(void) {
     if (!static_branch_unlikely(&nomount_active_rules)) return true;
     if (unlikely(!in_task() || in_nmi() || oops_in_progress)) return true;
     if (unlikely(current->flags & (PF_KTHREAD | PF_EXITING))) return true;
-    if (unlikely(!hash_empty(nomount_uid_ht))) {
+    if (unlikely(static_branch_unlikely(&nomount_active_uids))) {
         if (unlikely(nomount_is_uid_blocked(current_uid().val))) return true;
     }
     return false;
@@ -1302,6 +1304,8 @@ static int nomount_genl_add_uid(struct sk_buff *skb, struct genl_info *info)
     
     mutex_lock(&nomount_write_mutex);
     hash_add_rcu(nomount_uid_ht, &entry->node, uid);
+    atomic_inc(&nm_active_uids);
+    if (atomic_read(&nm_active_uids) == 1) static_branch_enable(&nomount_active_uids);
     mutex_unlock(&nomount_write_mutex);
     
     nm_info("Successfully added blocked UID: %u via Netlink\n", uid);
@@ -1329,6 +1333,8 @@ static int nomount_genl_del_uid(struct sk_buff *skb, struct genl_info *info)
             break; 
         }
     }
+    atomic_dec(&nm_active_uids);
+    if (atomic_read(&nm_active_uids) == 0) static_branch_disable(&nomount_active_uids);
     mutex_unlock(&nomount_write_mutex);
 
     if (found && entry) {
