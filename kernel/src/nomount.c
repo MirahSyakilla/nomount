@@ -141,9 +141,9 @@ static const char *nomount_build_path_from_pwd(const char *rel_name, size_t name
             cwd_str = (char *)page_buf;
         }
         end_ptr = cwd_str + dir_len;
-        if (dir_len > 0 && *(end_ptr - 1) != '/') {
+        if (dir_len > 0 && *(end_ptr - 1) != '/') 
             *end_ptr = '/'; end_ptr++; dir_len++;
-        }
+
         memcpy(end_ptr, rel_name, name_len + 1);
         if (out_len) *out_len = dir_len + name_len;
         *out_path = cwd_str;
@@ -224,7 +224,7 @@ char *nomount_handle_dpath(const struct path *path, char *buf, int buflen)
         if (likely(buflen >= len + 1)) {
             res = buf + buflen - len - 1;
             memcpy(res, rule->virtual_path, len + 1);
-            nm_debug("d_path spoofed %s to %s\n", path->dentry->d_name.name, rule->virtual_path);
+            nm_debug("d_path spoofed %s to %s\n", rule->real_path, rule->virtual_path);
             rcu_read_unlock();
             return res;
         }
@@ -251,7 +251,7 @@ int nomount_handle_permission(struct inode *inode, int mask)
 
     rcu_read_lock();
     is_injected = __nomount_is_injected_file_rcu(inode);
-    if (!is_injected) {
+    if (!is_injected && likely(S_ISDIR(inode->i_mode))) {
         is_dir = __nomount_is_traversal_allowed_rcu(inode);
     }
     rcu_read_unlock();
@@ -304,7 +304,7 @@ struct filename *nomount_handle_getname(struct filename *name)
     b_hash = full_name_hash(NULL, check_name, b_len);
 
     rcu_read_lock();
-    if (unlikely(s[0] == '/' && current_uid().val >= AID_APP_START && !list_empty(&nomount_private_dirs_list))) {
+    if (unlikely(s[0] == '/' && !list_empty(&nomount_private_dirs_list) && current_uid().val >= AID_APP_START)) {
         struct nomount_dir_node *priv_dir;
         list_for_each_entry_rcu(priv_dir, &nomount_private_dirs_list, private_list) {
             size_t len = priv_dir->dir_path_len;
@@ -335,9 +335,9 @@ struct filename *nomount_handle_getname(struct filename *name)
     rcu_read_lock();
     rule = nomount_get_rule_by_path(check_name, r_len);
     if (likely(rule)) {
+        nm_debug("Redirected: %s -> %s\n", check_name, rule->real_path);
         memcpy((char *)name->name, rule->real_path, rule->rp_len);
         ((char *)name->name)[rule->rp_len] = '\0';
-        nm_debug("Redirected: %s -> %s\n", check_name, rule->real_path);
     }
     rcu_read_unlock();
     if (page_buf) __putname(page_buf);
@@ -563,9 +563,7 @@ static inline struct nomount_dir_node* __nomount_get_or_create_dir(unsigned long
     RCU_INIT_POINTER(dir_node->child_array, NULL);
     hash_add_rcu(nomount_dirs_ht, &dir_node->node, ino);
     atomic_inc(&nm_active_dirs);
-    if (atomic_read(&nm_active_dirs) == 1)
-        static_branch_enable(&nomount_active_dirs);
-
+    if (atomic_read(&nm_active_dirs) == 1) static_branch_enable(&nomount_active_dirs);
     return dir_node;
 }
 
@@ -645,8 +643,7 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
     rule->parent_ino = dir_node->dir_ino;
     rule->parent_dev = dir_node->dir_dev;
 
-    old_array = rcu_dereference_protected(dir_node->child_array,
-                                          lockdep_is_held(&nomount_write_mutex));
+    old_array = rcu_dereference_protected(dir_node->child_array, lockdep_is_held(&nomount_write_mutex));
     if (old_array) {
         old_num = old_array->num_children;
         for (i = 0; i < old_num; i++) {
@@ -657,8 +654,7 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
         }
     }
 
-    new_array = kmalloc(sizeof(struct nm_child_array) + 
-                        (old_num + 1) * sizeof(struct nomount_child_name), GFP_KERNEL);
+    new_array = kmalloc(sizeof(struct nm_child_array) + (old_num + 1) * sizeof(struct nomount_child_name), GFP_KERNEL);
     if (unlikely(!new_array)) return;
 
     atomic_set(&new_array->refcnt, 1);
@@ -685,8 +681,7 @@ static void __nomount_delete_child_locked(struct nomount_dir_node *dir_node, uns
     int found_idx = -1;
     u32 i, num, dst = 0;
 
-    old_array = rcu_dereference_protected(dir_node->child_array,
-                    lockdep_is_held(&nomount_write_mutex));
+    old_array = rcu_dereference_protected(dir_node->child_array, lockdep_is_held(&nomount_write_mutex));
     if (!old_array) return;
 
     num = old_array->num_children;
@@ -696,7 +691,6 @@ static void __nomount_delete_child_locked(struct nomount_dir_node *dir_node, uns
             break;
         }
     }
-
     if (found_idx == -1) return;
 
     if (num == 1) {
@@ -708,16 +702,14 @@ static void __nomount_delete_child_locked(struct nomount_dir_node *dir_node, uns
         if (atomic_read(&nm_active_dirs) == 0) static_branch_disable(&nomount_active_dirs);
         hlist_add_head(&dir_node->node, d_victims);
     } else {
-        new_array = kmalloc(sizeof(struct nm_child_array) +
-                            (num - 1) * sizeof(struct nomount_child_name), GFP_KERNEL);
+        new_array = kmalloc(sizeof(struct nm_child_array) + (num - 1) * sizeof(struct nomount_child_name), GFP_KERNEL);
         if (unlikely(!new_array)) return;
 
         atomic_set(&new_array->refcnt, 1);
         new_array->num_children = num - 1;
         for (i = 0; i < num; i++) {
             if (i == found_idx) continue;
-            memcpy(&new_array->entries[dst++], &old_array->entries[i],
-                    sizeof(struct nomount_child_name));
+            memcpy(&new_array->entries[dst++], &old_array->entries[i], sizeof(struct nomount_child_name));
         }
         rcu_assign_pointer(dir_node->child_array, new_array);
         if (atomic_dec_and_test(&old_array->refcnt))
@@ -804,8 +796,8 @@ static int nomount_generate_virtual_topology(struct nomount_rule *rule)
             child_name_hash = full_name_hash(NULL, child_name, child_name_len);
             t_rule = (p_count == 1) ? rule : pending_rules[p_count - 2];
             __nomount_inject_child_locked(__nomount_get_or_create_dir(current_parent_ino, current_parent_dev),
-                                        t_rule, child_name, child_name_len, child_name_hash,
-                                        (current_flags & NM_FLAG_IS_DIR) ? DT_DIR : DT_REG, t_rule->v_hash);
+                                          t_rule, child_name, child_name_len, child_name_hash,
+                                          (current_flags & NM_FLAG_IS_DIR) ? DT_DIR : DT_REG, t_rule->v_hash);
             break;
         }
 
@@ -1061,9 +1053,7 @@ static void __nomount_del_rule(const char *v_path, size_t v_len,
             if (rule->v_ino) hash_del_rcu(&rule->v_ino_node);
             list_del_rcu(&rule->list);
             atomic_dec(&nm_active_rules);
-            if (atomic_read(&nm_active_rules) == 0)
-                static_branch_disable(&nomount_active_rules);
-
+            if (atomic_read(&nm_active_rules) == 0) static_branch_disable(&nomount_active_rules);
             list_add_tail(&rule->list, r_victims);
             hash_for_each_possible(nomount_dirs_ht, dir, node, rule->parent_ino) {
                 if (dir->dir_ino == rule->parent_ino && dir->dir_dev == rule->parent_dev) {
@@ -1111,8 +1101,10 @@ static void __nomount_clear_all(void)
 
     atomic_set(&nm_active_rules, 0);
     atomic_set(&nm_active_dirs, 0);
+    atomic_set(&nm_active_uids, 0);
     static_branch_disable(&nomount_active_rules);
     static_branch_disable(&nomount_active_dirs);
+    static_branch_disable(&nomount_active_uids);
 
     INIT_LIST_HEAD(&nomount_private_dirs_list);
 
@@ -1205,8 +1197,7 @@ static int nomount_genl_del_rule(struct sk_buff *skb, struct genl_info *info)
         mutex_lock(&nomount_write_mutex);
         while (pos + 2 <= len) {
             u16 vp_len = get_unaligned((const u16 *)(data + pos));
-            pos += 2;
-            if (pos + vp_len > len) break;
+            pos += 2; if (pos + vp_len > len) break;
             __nomount_del_rule(data + pos, vp_len, &r_victims, &d_victims);
             pos += vp_len;
         }
@@ -1255,10 +1246,7 @@ static int nomount_genl_dump_rules(struct sk_buff *skb, struct netlink_callback 
 
     rcu_read_lock();
     list_for_each_entry_rcu(rule, &nomount_rules_list, list) {
-        if (idx < start_idx) {
-            idx++;
-            continue;
-        }
+        if (idx < start_idx) { idx++; continue; }
 
         hdr = genlmsg_put(skb, NETLINK_CB(cb->skb).portid, cb->nlh->nlmsg_seq,
                           &nomount_genl_family, NLM_F_MULTI, NOMOUNT_CMD_GET_LIST);
@@ -1266,8 +1254,8 @@ static int nomount_genl_dump_rules(struct sk_buff *skb, struct netlink_callback 
             break;
 
         if (nla_put_string(skb, NOMOUNT_ATTR_VIRTUAL_PATH, rule->virtual_path) ||
-            nla_put_string(skb, NOMOUNT_ATTR_REAL_PATH, rule->real_path) ||
-            nla_put_u32(skb, NOMOUNT_ATTR_FLAGS, rule->flags)) {
+             nla_put_string(skb, NOMOUNT_ATTR_REAL_PATH, rule->real_path) ||
+             nla_put_u32(skb, NOMOUNT_ATTR_FLAGS, rule->flags)) {
 
             genlmsg_cancel(skb, hdr);
             break;
@@ -1297,9 +1285,7 @@ static int nomount_genl_add_uid(struct sk_buff *skb, struct genl_info *info)
         return -EEXIST;
 
     entry = kmem_cache_alloc(nm_uid_cachep, GFP_KERNEL);
-    if (!entry) 
-        return -ENOMEM;
-
+    if (!entry) return -ENOMEM;
     entry->uid = uid;
     
     mutex_lock(&nomount_write_mutex);
@@ -1308,7 +1294,7 @@ static int nomount_genl_add_uid(struct sk_buff *skb, struct genl_info *info)
     if (atomic_read(&nm_active_uids) == 1) static_branch_enable(&nomount_active_uids);
     mutex_unlock(&nomount_write_mutex);
     
-    nm_info("Successfully added blocked UID: %u via Netlink\n", uid);
+    nm_info("Successfully added blocked UID: %u\n", uid);
     return 0;
 }
 
@@ -1342,6 +1328,7 @@ static int nomount_genl_del_uid(struct sk_buff *skb, struct genl_info *info)
         kmem_cache_free(nm_uid_cachep, entry);
     }
 
+    nm_info("Successfully remove blocked UID: %u\n", uid);
     return found ? 0 : -ENOENT;
 }
 
@@ -1381,49 +1368,13 @@ static const struct nla_policy nomount_genl_policy[NOMOUNT_ATTR_MAX + 1] = {
 };
 
 static const struct genl_ops nomount_genl_ops[] = {
-    {
-        .cmd = NOMOUNT_CMD_ADD_RULE,
-        .flags = GENL_ADMIN_PERM,
-        .doit = nomount_genl_add_rule,
-        .dumpit = NULL,
-        NM_OPS_POLICY(nomount_genl_policy)
-    },{
-        .cmd = NOMOUNT_CMD_DEL_RULE,
-        .flags = GENL_ADMIN_PERM,
-        .doit = nomount_genl_del_rule,
-        .dumpit = NULL,
-        NM_OPS_POLICY(nomount_genl_policy)
-    },{
-        .cmd = NOMOUNT_CMD_CLEAR_ALL,
-        .flags = GENL_ADMIN_PERM,
-        .doit = nomount_genl_clear_rules,
-        .dumpit = NULL,
-        NM_OPS_POLICY(nomount_genl_policy)
-    },{
-        .cmd = NOMOUNT_CMD_ADD_UID,
-        .flags = GENL_ADMIN_PERM,
-        .doit = nomount_genl_add_uid,
-        .dumpit = NULL,
-        NM_OPS_POLICY(nomount_genl_policy)
-    },{
-        .cmd = NOMOUNT_CMD_DEL_UID,
-        .flags = GENL_ADMIN_PERM,
-        .doit = nomount_genl_del_uid,
-        .dumpit = NULL,
-        NM_OPS_POLICY(nomount_genl_policy)
-    },{
-        .cmd = NOMOUNT_CMD_GET_LIST,
-        .flags = GENL_ADMIN_PERM,
-        .doit = NULL,
-        .dumpit = nomount_genl_dump_rules,
-        NM_OPS_POLICY(nomount_genl_policy)
-    },{
-        .cmd = NOMOUNT_CMD_GET_VERSION,
-        .flags = GENL_ADMIN_PERM,
-        .doit = nomount_genl_get_version,
-        .dumpit = NULL,
-        NM_OPS_POLICY(nomount_genl_policy)
-    },
+    { .cmd = NOMOUNT_CMD_ADD_RULE, .flags = GENL_ADMIN_PERM, .doit = nomount_genl_add_rule, .dumpit = NULL, NM_OPS_POLICY(nomount_genl_policy) },
+    { .cmd = NOMOUNT_CMD_DEL_RULE, .flags = GENL_ADMIN_PERM, .doit = nomount_genl_del_rule, .dumpit = NULL, NM_OPS_POLICY(nomount_genl_policy) },
+    { .cmd = NOMOUNT_CMD_CLEAR_ALL, .flags = GENL_ADMIN_PERM, .doit = nomount_genl_clear_rules, .dumpit = NULL, NM_OPS_POLICY(nomount_genl_policy) },
+    { .cmd = NOMOUNT_CMD_ADD_UID, .flags = GENL_ADMIN_PERM, .doit = nomount_genl_add_uid, .dumpit = NULL, NM_OPS_POLICY(nomount_genl_policy) },
+    { .cmd = NOMOUNT_CMD_DEL_UID, .flags = GENL_ADMIN_PERM, .doit = nomount_genl_del_uid, .dumpit = NULL, NM_OPS_POLICY(nomount_genl_policy) },
+    { .cmd = NOMOUNT_CMD_GET_LIST, .flags = GENL_ADMIN_PERM, .doit = NULL, .dumpit = nomount_genl_dump_rules, NM_OPS_POLICY(nomount_genl_policy) },
+    { .cmd = NOMOUNT_CMD_GET_VERSION, .flags = GENL_ADMIN_PERM, .doit = nomount_genl_get_version, .dumpit = NULL, NM_OPS_POLICY(nomount_genl_policy) },
 };
 
 static struct genl_family nomount_genl_family = {
