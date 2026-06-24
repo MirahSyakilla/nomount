@@ -109,39 +109,47 @@ static inline bool __nomount_is_traversal_allowed_rcu(struct inode *inode) {
  * @name_len: The length of the relative filename
  * @out_len: Pointer to receive the length of the constructed path
  * @out_path: Pointer to receive the allocated path string
+ * @fast_buf: Pointer to a pre-allocated stack buffer for fast path resolution
  *
  * This helper is used to reconstruct an absolute path for operations that provide
- * a relative filename without a DFD, ensuring that NoMount can still resolve the intended target.
+ * a relative filename, ensuring that NoMount can still resolve the intended target.
  *
- * Returns a pointer to the allocated path string on success, or NULL on failure.
- * Caller must free the returned buffer using __putname() after use the pointer.
+ * This helper uses a fast stack buffer for common path sizes.
+ * If the path exceeds the fast buffer, it allocates a full page from names_cache.
+ * Returns a pointer to the buffer holding the path (fast_buf or a new page).
+ * If a new page is returned, it must be freed with __putname().
  */
-static const char *nomount_build_path_from_pwd(const char *rel_name, size_t name_len, size_t *out_len, const char **out_path) 
+static const char *nomount_build_path_from_pwd(const char *rel_name, size_t name_len, size_t *out_len,
+                                                const char **out_path, char *fast_buf)
 {
     struct path pwd;
-    const char *page_buf = __getname();
-    char *end_ptr, *cwd_str;
+    char *end_ptr, *cwd_str, *page_buf = fast_buf;
     size_t dir_len;
-
-    if (!page_buf) return NULL;
 
     rcu_read_lock();
     pwd = current->fs->pwd;
     path_get(&pwd);
     rcu_read_unlock();
-    cwd_str = d_path(&pwd, (char *)page_buf, PATH_MAX);
+    cwd_str = d_path(&pwd, page_buf, 512);
+
+    if (IS_ERR(cwd_str)) {
+        if (PTR_ERR(cwd_str) == -ENAMETOOLONG) {
+            page_buf = __getname();
+            if (unlikely(!page_buf)) { path_put(&pwd); return NULL; }
+            cwd_str = d_path(&pwd, page_buf, PATH_MAX);
+            if (IS_ERR(cwd_str)) { __putname(page_buf); path_put(&pwd); return NULL; }
+        } else {
+            path_put(&pwd);
+            return NULL;
+        }
+    }
     path_put(&pwd);
 
-    if (IS_ERR_OR_NULL(cwd_str)) {
-        __putname(page_buf);
-        return NULL;
-    }
-
     dir_len = strlen(cwd_str);
-    if (likely(dir_len + name_len + 2 <= PATH_MAX)) {
+    if (likely(dir_len + name_len + 2 <= (page_buf != fast_buf ? PATH_MAX : 512))) {
         if (cwd_str != page_buf) {
-            memmove((char *)page_buf, cwd_str, dir_len);
-            cwd_str = (char *)page_buf;
+            memmove(page_buf, cwd_str, dir_len);
+            cwd_str = page_buf;
         }
         end_ptr = cwd_str + dir_len;
         if (dir_len > 0 && *(end_ptr - 1) != '/') { *end_ptr = '/'; end_ptr++; dir_len++; }
@@ -151,7 +159,7 @@ static const char *nomount_build_path_from_pwd(const char *rel_name, size_t name
         return page_buf;
     }
 
-    __putname(page_buf);
+    if (page_buf != fast_buf) __putname(page_buf);
     return NULL;
 }
 
@@ -291,6 +299,7 @@ struct filename *nomount_handle_getname(struct filename *name)
     size_t name_len, b_len, r_len;
     bool basename_match = false;
     u32 b_hash;
+    char fast_buf[512];
 
     if (unlikely(__nomount_should_skip()))
         return name;
@@ -345,7 +354,7 @@ struct filename *nomount_handle_getname(struct filename *name)
         ((char *)name->name)[rule->real_node.len] = '\0';
     }
     rcu_read_unlock();
-    if (page_buf) __putname(page_buf);
+    if (page_buf && page_buf != fast_buf) __putname(page_buf);
     return name;
 
 out_unlock:
