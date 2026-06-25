@@ -342,7 +342,7 @@ struct filename *nomount_handle_getname(struct filename *name)
     check_name = s;
     r_len = name_len;
     if (unlikely(s[0] != '/')) {
-        page_buf = nomount_build_path_from_pwd(s, name_len, &r_len, &check_name);
+        page_buf = nomount_build_path_from_pwd(s, name_len, &r_len, &check_name, fast_buf);
         if (!page_buf) return name;
     }
 
@@ -548,10 +548,10 @@ bool nomount_spoof_mmap_metadata(struct inode *inode, dev_t *dev, unsigned long 
         return false;
 
     rcu_read_lock();
-    hash_for_each_possible_rcu(nomount_inodes_ht, node, node, inode->i_ino) {
-        if (node->ino == inode->i_ino && node->dev == inode->i_sb->s_dev) {
-            if (node->type & NM_INO_TYPE_REAL) {
-                rule = container_of(node, struct nomount_rule, real_node);
+    hash_for_each_possible_rcu(nomount_inodes_ht, inode_node, node, inode->i_ino) {
+        if (inode_node->ino == inode->i_ino && inode_node->dev == inode->i_sb->s_dev) {
+            if (inode_node->type & NM_INO_TYPE_REAL) {
+                rule = container_of(inode_node, struct nomount_rule, real_node);
                 *dev = READ_ONCE(rule->virt_node.dev);
                 *ino = READ_ONCE(rule->virt_node.ino);
                 rcu_read_unlock();
