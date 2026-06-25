@@ -16,7 +16,7 @@
         __asm__ __volatile__("svc 0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2) : "memory", "cc");
         return x0;
     }
-    __asm__( ".global _start\n" ".type _start, %function\n" "_start:\n" "    mov x0, sp\n" "    bl c_main\n" );
+    __asm__( ".global _start\n" ".type _start, %function\n" "_start:\n" "mov x0, sp\n" "b c_main\n" );
 
 #elif defined(__arm__)
     #define SYS_EXIT       1
@@ -35,7 +35,7 @@
         __asm__ __volatile__("svc 0" : "+r"(r0) : "r"(r7), "r"(r1), "r"(r2) : "memory", "cc");
         return r0;
     }
-    __asm__( ".global _start\n" ".type _start, %function\n" "_start:\n" "    mov r0, sp\n" "    bl c_main\n");
+    __asm__( ".global _start\n" ".type _start, %function\n" "_start:\n" "mov r0, sp\n" "b c_main\n");
 
 #elif defined(__x86_64__)
     #define SYS_READ       0
@@ -45,16 +45,14 @@
     #define SYS_GETCWD     79
 
     __attribute__((always_inline)) static inline long sys1(long n, long a) {
-        register long rax asm("rax") = n; register long rdi asm("rdi") = a;
-        __asm__ __volatile__("syscall" : "+r"(rax) : "r"(rdi) : "rcx", "r11", "memory", "cc");
-        return rax;
+        long ret; __asm__ __volatile__("syscall" : "=a"(ret) : "a"(n), "D"(a) : "rcx", "r11", "memory", "cc");
+        return ret;
     }
     __attribute__((always_inline)) static inline long sys3(long n, long a, long b, long c) {
-        register long rax asm("rax") = n; register long rdi asm("rdi") = a; register long rsi asm("rsi") = b; register long rdx asm("rdx") = c;
-        __asm__ __volatile__("syscall" : "+r"(rax) : "r"(rdi), "r"(rsi), "r"(rdx) : "rcx", "r11", "memory", "cc");
-        return rax;
+        long ret; __asm__ __volatile__("syscall" : "=a"(ret) : "a"(n), "D"(a), "S"(b), "d"(c) : "rcx", "r11", "memory", "cc");
+        return ret;
     }
-    __asm__( ".global _start\n" ".type _start, @function\n" "_start:\n" "    mov %rsp, %rdi\n" "    call c_main\n" );
+    __asm__( ".global _start\n" ".type _start, @function\n" "_start:\n" "mov %rsp, %rdi\n" "jmp c_main\n" );
 
 #else
     #error "Arch not supported"
@@ -64,10 +62,6 @@
 #define AF_NETLINK 16
 #define SOCK_RAW 3
 #define NETLINK_GENERIC 16
-#define ALIGN4(len) (((len) + 3) & -4)
-
-#define NLMSG_OK(nlh, len) ((nlh)->nlmsg_len && (nlh)->nlmsg_len <= (len))
-#define NLMSG_NEXT(nlh, len) ((len) -= ALIGN4((nlh)->nlmsg_len), (struct nlmsghdr *)(((char *)(nlh)) + ALIGN4((nlh)->nlmsg_len)))
 
 struct nlmsghdr {
     unsigned int   nlmsg_len;
@@ -77,85 +71,74 @@ struct nlmsghdr {
     unsigned int   nlmsg_pid;
 };
 
-struct genlmsghdr {
-    unsigned char cmd;
-    unsigned char version;
-    unsigned short reserved;
-};
-
-struct nlattr {
-    unsigned short nla_len;
-    unsigned short nla_type;
-};
-
-/* --- NETLINK ENGINE --- */
 #define PATH_MAX  4096
-#define RX_BUF_SIZE (PATH_MAX + 8)
-#define MAX_PAYLOAD (RX_BUF_SIZE - 88)
+#define RX_BUF_SIZE 32768
+#define TX_BUF_SIZE 16384
+#define MAX_PAYLOAD (TX_BUF_SIZE - 88)
 
-static char sys_mem[(RX_BUF_SIZE * 2) + (PATH_MAX * 3) + MAX_PAYLOAD] __attribute__((aligned(8)));
-#define tx_buf     (&sys_mem[0])
-#define rx_buf     (&sys_mem[RX_BUF_SIZE])
-#define v_resolved (&sys_mem[RX_BUF_SIZE * 2])
-#define r_resolved (&sys_mem[(RX_BUF_SIZE * 2) + PATH_MAX])
-#define cwd_buf    (&sys_mem[(RX_BUF_SIZE * 2) + (PATH_MAX * 2)])
-#define payload    (&sys_mem[(RX_BUF_SIZE * 2) + (PATH_MAX * 3)])
+static char sys_mem[RX_BUF_SIZE + TX_BUF_SIZE + (PATH_MAX * 3) + MAX_PAYLOAD] __attribute__((aligned(16)));
+#define rx_buf     (&sys_mem[0])
+#define tx_buf     (&sys_mem[RX_BUF_SIZE])
+#define v_resolved (&sys_mem[RX_BUF_SIZE + TX_BUF_SIZE])
+#define r_resolved (&sys_mem[RX_BUF_SIZE + TX_BUF_SIZE + PATH_MAX])
+#define cwd_buf    (&sys_mem[RX_BUF_SIZE + TX_BUF_SIZE + (PATH_MAX * 2)])
+#define payload    (&sys_mem[RX_BUF_SIZE + TX_BUF_SIZE + (PATH_MAX * 3)])
 
-__attribute__((noinline))
-static void *memcpy(void *dst, const void *src, unsigned int n) {
-    char *d = dst; const char *s = src;
-    while (n--) *d++ = *s++;
+#define noinline __attribute__((noinline))
+#if defined(__x86_64__)
+static noinline void *memcpy(void *dst, const void *src, unsigned long n) {
+    void *ret = dst;
+    __asm__ __volatile__("rep movsb" : "+D"(dst), "+S"(src), "+c"(n) : : "memory");
+    return ret;
+}
+#else
+static noinline void *memcpy(void *dst, const void *src, unsigned long n) {
+    char *d = dst;
+    const char *s = src;
+    while (n--) { *d++ = *s++; }
     return dst;
 }
+#endif
 
-__attribute__((noinline))
-static void print_str(const char *s) {
+static noinline void print_str(const char *s) {
     long len = 0;
     while (s[len]) len++;
     sys3(SYS_WRITE, 1, (long)s, len);
 }
 
-/* complete path resolution */
-__attribute__((noinline))
-static char* resolve_path(char *p, const char *cwd, const char *rel) {
+/* path resolution */
+static noinline char* resolve_path(char *p, const char *cwd, const char *rel) {
     if (cwd && *rel != '/') {
         while (*cwd) *p++ = *cwd++;
-        /* Linux VFS treats "//" exactly as "/" */
-        *p++ = '/'; 
+        *p++ = '/'; /* Linux VFS treats "//" exactly as "/" */
     }
-
     while ((*p++ = *rel++));
     return p - 1; /* Points exactly to '\0' */
 }
 
-__attribute__((noinline))
-static void *get_attr(const void *nh, int type) {
-    struct nlattr *attr = (void *)((char *)nh + 20);
-    while (attr->nla_len) {
-        if (attr->nla_type == type) return (char *)attr + 4;
-        attr = (void *)((char *)attr + ALIGN4(attr->nla_len));
+static noinline void *get_attr(const void *nh, int type) {
+    char *attr = (char *)nh + 20;
+    while (*(unsigned short *)attr) {
+        if (*(unsigned short *)(attr + 2) == type) return attr + 4;
+        attr += (*(unsigned short *)attr + 3) & -4; 
     }
     return (void *)0;
 }
 
 /* init_msg + add_attr + send_and_recv unified */
-__attribute__((noinline))
-static int do_nm_cmd(int fd, int fam, int cmd, int atype, const void *data, int len, int flags) {
+static noinline int do_nm_cmd(int fd, int fam, int cmd, int atype, const void *data, int len, int flags) {
     struct nlmsghdr *nlh = (void *)tx_buf;
-    struct genlmsghdr *gnlh = (void *)(tx_buf + 16);
-
     nlh->nlmsg_type = fam;
     nlh->nlmsg_flags = flags;
     nlh->nlmsg_len = 20;
-    gnlh->cmd = cmd;
-    gnlh->version = 1;
+    tx_buf[16] = cmd;
+    tx_buf[17] = 1;
 
     if (data) {
-        struct nlattr *nla = (void *)(tx_buf + 20);
-        nla->nla_type = atype;
-        nla->nla_len = 4 + len;
-        memcpy(nla + 1, data, len);
-        nlh->nlmsg_len = 20 + ALIGN4(nla->nla_len);
+        unsigned short *nla = (void *)(tx_buf + 20);
+        nla[0] = 4 + len; nla[1] = atype;
+        memcpy(nla + 2, data, len);
+        nlh->nlmsg_len = 20 + nla[0];
     }
 
     int res = sys3(SYS_WRITE, fd, (long)nlh, nlh->nlmsg_len);

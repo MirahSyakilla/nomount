@@ -19,9 +19,8 @@ void c_main(long *sp) {
     if (fd < 0) { exit_code = 2; goto do_exit; }
 
     int nm_family = -1;
-    /* flags: 1 = REQUEST */
-    if (do_nm_cmd(fd, 16, 3, 2, "nomount", 8, 1) > 0) { /* 16=CTRL, 3=GETFAMILY, 2=NAME */
-        unsigned short *fam_id = get_attr(rx_buf, 1); /* 1=FAMILY_ID */
+    if (do_nm_cmd(fd, 16, 3, 2, "nomount", 8, 1) > 0) { 
+        unsigned short *fam_id = get_attr(rx_buf, 1); 
         if (fam_id) nm_family = *fam_id;
     }
     if (nm_family < 0) { exit_code = 3; goto do_exit; }
@@ -34,7 +33,7 @@ void c_main(long *sp) {
 
         const char *cwd = (sys3(SYS_GETCWD, (long)cwd_buf, PATH_MAX, 0) > 0) ? cwd_buf : "/";
         char *cursor = payload;
-        int target_cmd = 3 - is_add; /* 2=ADD_RULE, 3=DEL_RULE */
+        int target_cmd = 3 - is_add; 
         exit_code = 0;
 
         for (int i = 2; i + step <= argc; i += step) {
@@ -50,7 +49,6 @@ void c_main(long *sp) {
             }
 
             if ((cursor - payload) + 8 + v_len + r_len > MAX_PAYLOAD) {
-                /* 6=PAYLOAD, 5=REQ|ACK */
                 exit_code |= (do_nm_cmd(fd, nm_family, target_cmd, 6, payload, cursor - payload, 5) < 0);
                 cursor = payload;
             }
@@ -77,18 +75,16 @@ void c_main(long *sp) {
         if (argc < 3) goto do_exit;
         unsigned int uid = 0; const char *s = argv[2];
         while (*s) uid = (uid << 3) + (uid << 1) + (*s++ - '0');
-        /* 5=ADD_UID, 6=DEL_UID, 4=ATTR_UID, 5=REQ|ACK */
         exit_code = (do_nm_cmd(fd, nm_family, 6 - (cmd == 'b'), 4, &uid, 4, 5) < 0);
         goto do_exit;
 
     } else if (cmd == 'c') {
-        /* 4=CLEAR_ALL, 5=REQ|ACK */
         exit_code = (do_nm_cmd(fd, nm_family, 4, 0, (void *)0, 0, 5) < 0);
         goto do_exit;
 
     } else if (cmd == 'v') {
-        if (do_nm_cmd(fd, nm_family, 1, 0, (void *)0, 0, 5) > 0) { /* 1=GET_VERSION */
-            unsigned int *ver = get_attr(rx_buf, 5 /* ATTR_VERSION */);
+        if (do_nm_cmd(fd, nm_family, 1, 0, (void *)0, 0, 5) > 0) { 
+            unsigned int *ver = get_attr(rx_buf, 5);
             if (ver) {
                 unsigned int v = *ver; char v_str[4] = {0};
                 unsigned char tens = ((v << 7) + (v << 6) + (v << 3) + (v << 2) + v) >> 11;
@@ -100,16 +96,17 @@ void c_main(long *sp) {
         }
 
     } else if (cmd == 'l') {
-        unsigned int len = do_nm_cmd(fd, nm_family, 7, 0, (void *)0, 0, 0x301); /* 7=GET_LIST, 0x301=REQ|DUMP */
+        unsigned int len = do_nm_cmd(fd, nm_family, 7, 0, (void *)0, 0, 0x301);
         int is_json = (argc > 2 && argv[2][0] == 'j');
         int offset = 2;
         if (is_json) print_str("[\n");
 
         while (len > 0) {
-            for (struct nlmsghdr *msg = (void *)rx_buf; NLMSG_OK(msg, len); msg = NLMSG_NEXT(msg, len)) {
-                if (msg->nlmsg_type == 3 || msg->nlmsg_type == 2) goto list_done; /* 3=DONE, 2=ERROR */
-                char *v = get_attr(msg, 1); /* 1=VIRTUAL_PATH */
-                char *r = get_attr(msg, 2); /* 2=REAL_PATH */
+            for (struct nlmsghdr *msg = (void *)rx_buf; msg->nlmsg_len && msg->nlmsg_len <= len;
+                    len -= msg->nlmsg_len, msg = (void *)((char *)msg + msg->nlmsg_len)) {
+                if (msg->nlmsg_type == 3 || msg->nlmsg_type == 2) goto list_done; 
+                char *v = get_attr(msg, 1); 
+                char *r = get_attr(msg, 2); 
 
                 if (v && r) {
                     if (is_json) {
@@ -129,4 +126,5 @@ list_done:
 
 do_exit:
     sys1(SYS_EXIT, exit_code);
+    __builtin_unreachable();
 }
