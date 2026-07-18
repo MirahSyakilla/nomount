@@ -50,5 +50,12 @@
   "refresh_failed": "Gagal memuat ulang",
   "load_failed": "Gagal memuat aplikasi",
   "status_version_unknown": "Tidak diketahui",
-  "add_exclusion": "Tambah pengecualian"
+  "add_exclusion": "Tambah pengecualian",
+  "selftest_title": "Self-Test Hookless",
+  "selftest_desc": "Jalankan pengecekan fitur NoMount yang aman dan tulis log lengkap ke /data/adb/nomount/selftest.log.",
+  "selftest_run": "Jalankan",
+  "selftest_running": "Menjalankan self-test NoMount...",
+  "selftest_pass": "Self-test NoMount lulus",
+  "selftest_fail": "Self-test NoMount gagal",
+  "selftest_unavailable": "Helper self-test tidak tersedia"
 }

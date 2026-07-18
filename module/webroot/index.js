@@ -105,7 +105,8 @@ function renderLanguagePicker() {
 const MOD_DIR = "/data/adb/modules";
 const NM_DATA = "/data/adb/nomount";
 const NM_BIN = "/data/adb/modules/nomount/bin/nm";
-const FILES = { verbose: `${NM_DATA}/.verbose`, disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list` };
+const SELFTEST_BIN = "/data/adb/modules/nomount/bin/nomount-selftest";
+const FILES = { verbose: `${NM_DATA}/.verbose`, disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list`, selftestLog: `${NM_DATA}/selftest.log` };
 const APP_ICON_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzgwODA4MCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIvPjwvc3ZnPg==";
 const viewLoadState = { 'view-home': false, 'view-modules': false, 'view-exclusions': false, 'view-options': false };
 
@@ -298,7 +299,12 @@ async function loadHome() {
         getprop ro.build.version.sdk; echo "|||"
         grep "version=" ${MOD_DIR}/nomount/module.prop | cut -d= -f2; echo "|||"
         ${NM_BIN} v; echo "|||"
-        ${NM_BIN} list json
+        NM_VER="$(${NM_BIN} v 2>/dev/null | tr -d '\\r\\n')"
+        if [ -n "$NM_VER" ] && [ "$NM_VER" -ge 13 ] 2>/dev/null; then
+            ${NM_BIN} list json
+        else
+            echo "[]"
+        fi
     `;
 
     try {
@@ -367,7 +373,13 @@ async function loadModules() {
 
     try {
         const script = `
-            ${NM_BIN} list json; echo "|||"
+            NM_VER="$(${NM_BIN} v 2>/dev/null | tr -d '\\r\\n')"
+            if [ -n "$NM_VER" ] && [ "$NM_VER" -ge 13 ] 2>/dev/null; then
+                ${NM_BIN} list json
+            else
+                echo "[]"
+            fi
+            echo "|||"
             cd ${MOD_DIR}
             for mod in *; do
                 [ ! -d "$mod" ] || [ "$mod" = "nomount" ] || [ ! -f "$mod/module.prop" ] && continue
@@ -679,7 +691,8 @@ async function addExclusion(uid, name) {
 async function loadOptions() {
     const swVerbose = document.querySelector('#setting-verbose input'),
           swSafe = document.querySelector('#setting-safemode input'),
-          btnClear = document.getElementById('btn-clear-rules');
+          btnClear = document.getElementById('btn-clear-rules'),
+          btnSelftest = document.getElementById('btn-run-selftest');
 
     if (swVerbose) { 
         swVerbose.checked = (await exec(`[ -f ${FILES.verbose} ] && echo yes`)).stdout.includes('yes');
@@ -695,6 +708,33 @@ async function loadOptions() {
         btnClear.onclick = async () => {
             showToast(translate('clear_rules_toast'));
             try { await exec(`${NM_BIN} clear`); showToast(translate('clear_rules_done')); loadModules(); loadExclusions(); } catch { showToast(translate('save_failed')); }
+        };
+    }
+
+    if (btnSelftest) {
+        const available = (await exec(`[ -x ${SELFTEST_BIN} ] && echo yes`)).stdout.includes('yes');
+        btnSelftest.disabled = !available;
+        btnSelftest.onclick = async () => {
+            if (!available || btnSelftest.dataset.busy) {
+                if (!available) showToast(translate('selftest_unavailable'));
+                return;
+            }
+
+            btnSelftest.dataset.busy = 'true';
+            btnSelftest.disabled = true;
+            showToast(translate('selftest_running'));
+            try {
+                const { errno, stdout, stderr } = await exec(`${SELFTEST_BIN}`);
+                if (errno === 0) {
+                    showToast(translate('selftest_pass'));
+                } else {
+                    console.error('NoMount self-test failed', { errno, stdout, stderr });
+                    showToast(translate('selftest_fail'));
+                }
+            } finally {
+                delete btnSelftest.dataset.busy;
+                btnSelftest.disabled = !available;
+            }
         };
     }
 }

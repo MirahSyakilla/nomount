@@ -50,5 +50,12 @@
   "refresh_failed": "Refresh failed",
   "load_failed": "Error loading apps",
   "status_version_unknown": "Unknown",
-  "add_exclusion": "Add exclusion"
+  "add_exclusion": "Add exclusion",
+  "selftest_title": "Hookless Self-Test",
+  "selftest_desc": "Run a safe NoMount feature check and write the full log to /data/adb/nomount/selftest.log.",
+  "selftest_run": "Run",
+  "selftest_running": "Running NoMount self-test...",
+  "selftest_pass": "NoMount self-test passed",
+  "selftest_fail": "NoMount self-test failed",
+  "selftest_unavailable": "Self-test helper is unavailable"
 }

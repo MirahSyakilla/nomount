@@ -1,0 +1,204 @@
+#!/system/bin/sh
+
+MODDIR=${0%/*}
+NM_BIN="$MODDIR/nm"
+NM_DATA="/data/adb/nomount"
+LOG_FILE="$NM_DATA/selftest.log"
+TAG="nomount-selftest-$$"
+TMPROOT="/data/local/tmp/$TAG"
+SYSTEM_PARENT=""
+UID_SELF="$(id -u 2>/dev/null || echo 0)"
+CAN_LIST=0
+
+mkdir -p "$NM_DATA" >/dev/null 2>&1
+: > "$LOG_FILE"
+
+log() {
+    printf '%s\n' "$*" | tee -a "$LOG_FILE"
+}
+
+fail() {
+    log "SELFTEST FAIL: $*"
+    exit 1
+}
+
+pass() {
+    log "PASS: $*"
+}
+
+json_rules() {
+    [ "$CAN_LIST" -eq 1 ] || {
+        printf '[]\n'
+        return 0
+    }
+    "$NM_BIN" list json 2>/dev/null
+}
+
+has_rule() {
+    json_rules | tr -d '\n' | grep -F "\"virtual\": \"$1\"" >/dev/null 2>&1
+}
+
+has_whiteout_rule() {
+    json_rules | tr -d '\n' | grep -F "\"virtual\": \"$1\"" | grep -F "\"whiteout\": true" >/dev/null 2>&1
+}
+
+require_rule() {
+    if [ "$CAN_LIST" -eq 0 ]; then
+        log "SKIP: list json unavailable on this kernel, rule visibility check skipped for $1"
+        return 0
+    fi
+    has_rule "$1"
+}
+
+require_whiteout_rule() {
+    if [ "$CAN_LIST" -eq 0 ]; then
+        log "SKIP: list json unavailable on this kernel, whiteout visibility check skipped for $1"
+        return 0
+    fi
+    has_whiteout_rule "$1"
+}
+
+assert_text() {
+    desc="$1"
+    expected="$2"
+    actual="$3"
+    if [ "$expected" = "$actual" ]; then
+        pass "$desc"
+        return 0
+    fi
+    log "EXPECTED: $expected"
+    log "ACTUAL:   $actual"
+    fail "$desc"
+}
+
+cleanup() {
+    "$NM_BIN" unblock "$UID_SELF" >/dev/null 2>&1
+    [ -n "$V_SYSTEM" ] && "$NM_BIN" del "$V_SYSTEM" >/dev/null 2>&1
+    [ -n "$V_LINK" ] && "$NM_BIN" del "$V_LINK" >/dev/null 2>&1
+    [ -n "$V_SYNTH" ] && "$NM_BIN" del "$V_SYNTH" >/dev/null 2>&1
+    [ -n "$V_EXISTING" ] && "$NM_BIN" del "$V_EXISTING" >/dev/null 2>&1
+    [ -n "$V_WHITEOUT" ] && "$NM_BIN" del "$V_WHITEOUT" >/dev/null 2>&1
+    [ -n "$V_CLEAR" ] && "$NM_BIN" del "$V_CLEAR" >/dev/null 2>&1
+    rm -rf "$TMPROOT"
+}
+
+trap cleanup EXIT INT TERM
+
+log "=== NoMount self-test start: $(date) ==="
+
+if [ ! -x "$NM_BIN" ]; then
+    fail "nm binary missing at $NM_BIN"
+fi
+
+VERSION="$("$NM_BIN" v 2>/dev/null | tr -d '\r\n')"
+[ -n "$VERSION" ] || fail "nomount version query failed"
+pass "netlink version query responded with '$VERSION'"
+case "$VERSION" in
+    ''|*[!0-9]*) CAN_LIST=0 ;;
+    *) [ "$VERSION" -ge 13 ] && CAN_LIST=1 ;;
+esac
+[ "$CAN_LIST" -eq 1 ] || log "SKIP: list json checks require NoMount kernel interface v13+"
+
+INITIAL_RULES="$(json_rules)"
+INITIAL_RULE_COUNT="$(printf '%s\n' "$INITIAL_RULES" | grep -c '"virtual"' 2>/dev/null)"
+
+for candidate in /system/etc /vendor/etc /product/etc /system_ext/etc /odm/etc; do
+    if [ -d "$candidate" ]; then
+        SYSTEM_PARENT="$candidate"
+        break
+    fi
+done
+
+mkdir -p "$TMPROOT/base" "$TMPROOT/real" || fail "failed to prepare temp tree"
+
+printf 'stock-existing\n' > "$TMPROOT/base/existing.txt" || fail "failed to create existing file"
+printf 'whiteout-source\n' > "$TMPROOT/base/whiteout.txt" || fail "failed to create whiteout file"
+printf 'redirect-existing\n' > "$TMPROOT/real/replaced.txt" || fail "failed to create replacement file"
+printf 'redirect-shared\n' > "$TMPROOT/real/shared.txt" || fail "failed to create shared file"
+printf 'symlink-target\n' > "$TMPROOT/real/target.txt" || fail "failed to create symlink target"
+ln -sf "$TMPROOT/real/target.txt" "$TMPROOT/real/link.lnk" || fail "failed to create real symlink"
+
+V_EXISTING="$TMPROOT/base/existing.txt"
+V_WHITEOUT="$TMPROOT/base/whiteout.txt"
+V_SYNTH="$TMPROOT/virt-$TAG/dir-$TAG/file.txt"
+V_CLEAR="$TMPROOT/base/clear.txt"
+V_SYSTEM=""
+V_LINK=""
+if [ -n "$SYSTEM_PARENT" ]; then
+    V_SYSTEM="$SYSTEM_PARENT/$TAG-system.txt"
+    V_LINK="$SYSTEM_PARENT/$TAG-link"
+fi
+
+"$NM_BIN" add "$V_EXISTING" "$TMPROOT/real/replaced.txt" >/dev/null 2>&1 || fail "failed to add replacement rule"
+assert_text "existing child replacement" "redirect-existing" "$(cat "$V_EXISTING" 2>/dev/null | tr -d '\r\n')"
+require_rule "$V_EXISTING" || fail "replacement rule missing from list json"
+"$NM_BIN" del "$V_EXISTING" >/dev/null 2>&1 || fail "failed to delete replacement rule"
+assert_text "replacement cleanup restored stock file" "stock-existing" "$(cat "$V_EXISTING" 2>/dev/null | tr -d '\r\n')"
+
+if [ -n "$V_SYSTEM" ]; then
+    "$NM_BIN" add "$V_SYSTEM" "$TMPROOT/real/shared.txt" >/dev/null 2>&1 || fail "failed to add system-dir injection rule"
+    assert_text "system directory injected file content" "redirect-shared" "$(cat "$V_SYSTEM" 2>/dev/null | tr -d '\r\n')"
+    ls "$SYSTEM_PARENT" 2>/dev/null | grep -F "${V_SYSTEM##*/}" >/dev/null 2>&1 || fail "system directory readdir did not expose injected file"
+    require_rule "$V_SYSTEM" || fail "system directory rule missing from list json"
+
+    if [ "$UID_SELF" = "0" ]; then
+        log "SKIP: uid block test skipped for uid 0 to avoid blocking root/WebUI"
+    else
+        "$NM_BIN" block "$UID_SELF" >/dev/null 2>&1 || fail "failed to block current uid"
+        [ ! -e "$V_SYSTEM" ] || fail "uid block did not hide injected file lookup"
+        if ls "$SYSTEM_PARENT" 2>/dev/null | grep -F "${V_SYSTEM##*/}" >/dev/null 2>&1; then
+            fail "uid block did not hide injected file from readdir"
+        fi
+        "$NM_BIN" unblock "$UID_SELF" >/dev/null 2>&1 || fail "failed to unblock current uid"
+        assert_text "uid unblock restored injected file" "redirect-shared" "$(cat "$V_SYSTEM" 2>/dev/null | tr -d '\r\n')"
+    fi
+
+    "$NM_BIN" add "$V_LINK" "$TMPROOT/real/link.lnk" >/dev/null 2>&1 || fail "failed to add symlink redirect rule"
+    assert_text "symlink redirect preserves target content" "symlink-target" "$(cat "$V_LINK" 2>/dev/null | tr -d '\r\n')"
+    if command -v readlink >/dev/null 2>&1; then
+        assert_text "symlink redirect preserves link target" "$TMPROOT/real/target.txt" "$(readlink "$V_LINK" 2>/dev/null | tr -d '\r\n')"
+    else
+        log "SKIP: readlink not available, symlink target text check skipped"
+    fi
+    require_rule "$V_LINK" || fail "symlink rule missing from list json"
+    "$NM_BIN" del "$V_LINK" >/dev/null 2>&1 || fail "failed to delete symlink rule"
+    "$NM_BIN" del "$V_SYSTEM" >/dev/null 2>&1 || fail "failed to delete system-dir injection rule"
+else
+    log "SKIP: no readable system/vendor/etc parent found for system-dir and symlink tests"
+fi
+
+"$NM_BIN" add "$V_SYNTH" "$TMPROOT/real/shared.txt" >/dev/null 2>&1 || fail "failed to add synthetic ancestor rule"
+assert_text "synthetic nested lookup content" "redirect-shared" "$(cat "$V_SYNTH" 2>/dev/null | tr -d '\r\n')"
+ls "$(dirname "$V_SYNTH")" 2>/dev/null | grep -F "${V_SYNTH##*/}" >/dev/null 2>&1 || fail "synthetic leaf directory readdir missing injected file"
+ls "$(dirname "$(dirname "$V_SYNTH")")" 2>/dev/null | grep -F "$(basename "$(dirname "$V_SYNTH")")" >/dev/null 2>&1 || fail "synthetic ancestor readdir missing child directory"
+require_rule "$V_SYNTH" || fail "synthetic rule missing from list json"
+"$NM_BIN" del "$V_SYNTH" >/dev/null 2>&1 || fail "failed to delete synthetic rule"
+[ ! -e "$(dirname "$(dirname "$V_SYNTH")")" ] || fail "synthetic ancestor was not pruned after delete"
+pass "synthetic ancestor cleanup pruned intermediate directories"
+
+"$NM_BIN" w "$V_WHITEOUT" >/dev/null 2>&1 || fail "failed to add whiteout rule"
+[ ! -e "$V_WHITEOUT" ] || fail "whiteout did not hide existing file lookup"
+if ls "$TMPROOT/base" 2>/dev/null | grep -F "whiteout.txt" >/dev/null 2>&1; then
+    fail "whiteout did not hide existing file from readdir"
+fi
+require_whiteout_rule "$V_WHITEOUT" || fail "whiteout rule missing from list json"
+"$NM_BIN" del "$V_WHITEOUT" >/dev/null 2>&1 || fail "failed to delete whiteout rule"
+assert_text "whiteout cleanup restored file" "whiteout-source" "$(cat "$V_WHITEOUT" 2>/dev/null | tr -d '\r\n')"
+
+if [ "$INITIAL_RULE_COUNT" -eq 0 ]; then
+    printf 'clear-target\n' > "$TMPROOT/real/clear.txt" || fail "failed to create clear target"
+    "$NM_BIN" add "$V_CLEAR" "$TMPROOT/real/clear.txt" >/dev/null 2>&1 || fail "failed to add clear test rule"
+    has_rule "$V_CLEAR" || fail "clear test rule missing before clear"
+    "$NM_BIN" clear >/dev/null 2>&1 || fail "nm clear failed in empty baseline mode"
+    [ ! -e "$V_CLEAR" ] || fail "nm clear did not remove injected lookup"
+    if has_rule "$V_CLEAR"; then
+        fail "nm clear did not purge test rule from list json"
+    fi
+    V_CLEAR=""
+    pass "clear command removed all rules in empty baseline mode"
+else
+    log "SKIP: clear command test skipped because $INITIAL_RULE_COUNT pre-existing rule(s) were present"
+fi
+
+log "SELFTEST PASS: NoMount hookless features look healthy"
+exit 0

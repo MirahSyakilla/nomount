@@ -50,5 +50,12 @@
   "refresh_failed": "刷新失败",
   "load_failed": "加载应用程序出错",
   "status_version_unknown": "未知",
-  "add_exclusion": "添加排除项"
+  "add_exclusion": "添加排除项",
+  "selftest_title": "Hookless 自检",
+  "selftest_desc": "运行安全的 NoMount 功能检查，并将完整日志写入 /data/adb/nomount/selftest.log。",
+  "selftest_run": "运行",
+  "selftest_running": "正在运行 NoMount 自检...",
+  "selftest_pass": "NoMount 自检通过",
+  "selftest_fail": "NoMount 自检失败",
+  "selftest_unavailable": "自检辅助脚本不可用"
 }

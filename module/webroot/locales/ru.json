@@ -50,5 +50,12 @@
   "refresh_failed": "Обновление не удалось",
   "load_failed": "Ошибка загрузки приложений",
   "status_version_unknown": "Неизвестно",
-  "add_exclusion": "Добавить исключение"
+  "add_exclusion": "Добавить исключение",
+  "selftest_title": "Hookless Self-Test",
+  "selftest_desc": "Запустить безопасную проверку функций NoMount и сохранить полный лог в /data/adb/nomount/selftest.log.",
+  "selftest_run": "Запустить",
+  "selftest_running": "Запуск self-test NoMount...",
+  "selftest_pass": "Self-test NoMount пройден",
+  "selftest_fail": "Self-test NoMount завершился ошибкой",
+  "selftest_unavailable": "Self-test helper недоступен"
 }

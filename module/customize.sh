@@ -12,6 +12,9 @@ if [ ! -f "$MODPATH/bin/nm-$ARCH" ]; then
 fi
 mv "$MODPATH/bin/nm-$ARCH" "$MODPATH/bin/nm"
 set_perm "$MODPATH/bin/nm" 0 0 0755
+if [ -f "$MODPATH/bin/nomount-selftest" ]; then
+  set_perm "$MODPATH/bin/nomount-selftest" 0 0 0755
+fi
 rm -rf $MODPATH/bin/nm-*
 
 ui_print "- Checking Kernel support via Netlink..."
@@ -27,7 +30,7 @@ else
   ui_print "* The NoMount Netlink interface is unresponsive.  *"
   ui_print "* *"
   ui_print "* This module will NOT FUNCTION until you flash   *"
-  ui_print "* a Kernel compiled with CONFIG_NOMOUNT=y         *"
+  ui_print "* a Kernel compiled with KSU_KPROBES_NOMOUNT=y   *"
   ui_print "***************************************************"
   ui_print " "
   
