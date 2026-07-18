@@ -2,10 +2,10 @@ name: build module
 
 on:
   push:
-    branches: master
-    paths-ignore: 
+    branches:
+      - nomount-ksun-hookless
+    paths-ignore:
       - '**.md'
-      - 'kernel/**'
   workflow_dispatch:
 
 jobs:
@@ -64,4 +64,3 @@ jobs:
         with:
           name: ${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}-${{ github.run_number }}-${{ env.COMMIT_HASH }}
           path: module/
-

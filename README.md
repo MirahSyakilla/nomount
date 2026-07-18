@@ -1,4 +1,4 @@
-# NoMount
+# NoMount for KernelSU-Next Hookless
 
 > WARNING: This project operates directly at the kernel VFS layer and is intended for research and development. Also this project may contain bugs. Proceed with caution.
 
@@ -26,11 +26,25 @@ Traditional methods (such a Magic Mount) modify the mount table. Some detectors 
 
 ## Kernel Integration
 
-Please see [kernel/README.md](kernel/README.md) for detailed kernel-side integration, patch instructions, and atchitecture details.
+This fork targets the KernelSU-Next `susfs+nomount-hookless` branch. It does
+not ship standalone kernel patches and does not require copying files into the
+kernel `fs/` tree.
+
+Build the kernel with:
+
+```text
+CONFIG_KSU_KPROBES_HOOK=y
+CONFIG_KSU_KPROBES_SUSFS=y
+CONFIG_KSU_KPROBES_NOMOUNT=y
+```
+
+The NoMount kernel side is hosted inside KernelSU-Next and shares the hookless
+SUSFS VFS bridge.
 
 ## Usage (Userspace)
 
-The subsystem is controlled via the [`nm`](userspace/src/nm.c) binary communicating through a custom IOCTL interface.
+The subsystem is controlled via the [`nm`](userspace/src/nm.c) binary
+communicating with the KernelSU-hosted `nomount` Generic Netlink family.
 
 | Command | Syntax | Description |
 | :--- | :--- | :--- |
@@ -42,6 +56,17 @@ The subsystem is controlled via the [`nm`](userspace/src/nm.c) binary communicat
 | **List Rules** | `nm ls [json]` | Show currently active rules (supports standard or `json` output). |
 | **Clear All** | `nm clear` | Flush all rules and UID blocks immediately. |
 | **Version** | `nm ver` | Show the kernel subsystem version. |
+
+## Hookless Self-Test
+
+The module includes `bin/nomount-selftest`, also exposed from the WebUI. It
+checks version probing, replacement, cleanup, system directory injection,
+symlink redirects, synthetic nested directories, whiteout, rule listing, and
+clear behavior. The full log is written to:
+
+```text
+/data/adb/nomount/selftest.log
+```
 
 ### Examples
 
@@ -83,9 +108,9 @@ nm block 10256
 -  **[ZQZCC](https://github.com/ZQZCC)**: WebUI MD3E-style design.
 -  **[backslashxx](https://github.com/backslashxx)**: Code optimization.
 -  **[KernelSU](https://github.com/tiann/KernelSU)**: Root solution.
+-  **[KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next)**: Hookless integration host.
 -  **All testers**: Thanks for making this project more stable!
 
 ## Disclaimer
 
 **NoMount** is a powerful kernel modification tool intended for research and development. Modifying kernel behavior carries inherent risks, including system instability or data loss. The developers are not responsible for bricked devices or thermonuclear war.
-

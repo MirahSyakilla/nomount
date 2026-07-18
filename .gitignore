@@ -1,3 +1,5 @@
 ELFkickers-3.2
 sstrip
 *.zip
+/bin/
+/module/bin/nm-*
