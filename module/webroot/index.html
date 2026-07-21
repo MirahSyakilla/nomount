@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="color-scheme" content="light dark">
     <meta name="theme-color" content="#fffbff">
     <title>NoMount</title>
@@ -203,6 +203,30 @@
                 <div id="app-list-container" class="app-list">
                     <div class="loading-spinner" data-i18n="loading_apps">Loading apps...</div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="selftest-modal" class="modal-overlay" role="dialog" aria-modal="true"
+        aria-labelledby="selftest-modal-title" aria-hidden="true">
+        <div class="modal-content selftest-modal-content">
+            <div class="modal-header selftest-modal-header">
+                <div>
+                    <h3 id="selftest-modal-title" data-i18n="selftest_progress_title">NoMount Self-Test</h3>
+                    <p id="selftest-modal-subtitle" data-i18n="selftest_progress_desc">Live checks and diagnostic output</p>
+                </div>
+            </div>
+
+            <div class="selftest-log-wrapper" id="selftest-log-wrapper">
+                <pre id="selftest-log" class="selftest-log" aria-live="polite" aria-atomic="false"></pre>
+            </div>
+
+            <div class="selftest-footer">
+                <span id="selftest-state" class="selftest-state running" data-i18n="selftest_starting">Starting...</span>
+                <button class="custom-tonal-btn selftest-close-btn" id="btn-close-selftest" disabled
+                    data-i18n="selftest_close">
+                    Close
+                </button>
             </div>
         </div>
     </div>

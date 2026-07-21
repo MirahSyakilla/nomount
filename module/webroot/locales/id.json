@@ -57,5 +57,14 @@
   "selftest_running": "Menjalankan self-test NoMount...",
   "selftest_pass": "Self-test NoMount lulus",
   "selftest_fail": "Self-test NoMount gagal",
-  "selftest_unavailable": "Helper self-test tidak tersedia"
+  "selftest_unavailable": "Helper self-test tidak tersedia",
+  "selftest_progress_title": "Self-Test NoMount",
+  "selftest_progress_desc": "Pemeriksaan langsung dan keluaran diagnostik",
+  "selftest_starting": "Memulai...",
+  "selftest_waiting": "Menunggu keluaran pengujian...",
+  "selftest_close": "Tutup",
+  "selftest_timeout": "Self-test melewati batas waktu 3 menit.",
+  "selftest_read_failed": "Log self-test langsung tidak dapat dibaca.",
+  "selftest_status_invalid": "Self-test mengembalikan status selesai yang tidak valid.",
+  "selftest_launch_failed": "Self-test tidak dapat dimulai"
 }

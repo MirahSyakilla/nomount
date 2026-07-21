@@ -57,5 +57,14 @@
   "selftest_running": "正在运行 NoMount 自检...",
   "selftest_pass": "NoMount 自检通过",
   "selftest_fail": "NoMount 自检失败",
-  "selftest_unavailable": "自检辅助脚本不可用"
+  "selftest_unavailable": "自检辅助脚本不可用",
+  "selftest_progress_title": "NoMount 自检",
+  "selftest_progress_desc": "实时检查与诊断输出",
+  "selftest_starting": "正在启动...",
+  "selftest_waiting": "正在等待测试输出...",
+  "selftest_close": "关闭",
+  "selftest_timeout": "自检运行超过 3 分钟，已超时。",
+  "selftest_read_failed": "无法读取实时自检日志。",
+  "selftest_status_invalid": "自检返回了无效的完成状态。",
+  "selftest_launch_failed": "无法启动自检"
 }

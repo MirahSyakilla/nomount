@@ -57,5 +57,14 @@
   "selftest_running": "Running NoMount self-test...",
   "selftest_pass": "NoMount self-test passed",
   "selftest_fail": "NoMount self-test failed",
-  "selftest_unavailable": "Self-test helper is unavailable"
+  "selftest_unavailable": "Self-test helper is unavailable",
+  "selftest_progress_title": "NoMount Self-Test",
+  "selftest_progress_desc": "Live checks and diagnostic output",
+  "selftest_starting": "Starting...",
+  "selftest_waiting": "Waiting for test output...",
+  "selftest_close": "Close",
+  "selftest_timeout": "Self-test timed out after 3 minutes.",
+  "selftest_read_failed": "Unable to read the live self-test log.",
+  "selftest_status_invalid": "Self-test returned an invalid completion status.",
+  "selftest_launch_failed": "Unable to start the self-test"
 }

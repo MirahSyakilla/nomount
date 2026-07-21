@@ -57,5 +57,14 @@
   "selftest_running": "Запуск self-test NoMount...",
   "selftest_pass": "Self-test NoMount пройден",
   "selftest_fail": "Self-test NoMount завершился ошибкой",
-  "selftest_unavailable": "Self-test helper недоступен"
+  "selftest_unavailable": "Self-test helper недоступен",
+  "selftest_progress_title": "Self-Test NoMount",
+  "selftest_progress_desc": "Проверки и диагностический вывод в реальном времени",
+  "selftest_starting": "Запуск...",
+  "selftest_waiting": "Ожидание вывода теста...",
+  "selftest_close": "Закрыть",
+  "selftest_timeout": "Self-test превысил лимит времени в 3 минуты.",
+  "selftest_read_failed": "Не удалось прочитать журнал self-test.",
+  "selftest_status_invalid": "Self-test вернул недопустимый статус завершения.",
+  "selftest_launch_failed": "Не удалось запустить self-test"
 }

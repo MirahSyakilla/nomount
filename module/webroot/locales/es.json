@@ -57,5 +57,14 @@
   "selftest_running": "Ejecutando la autoPrueba de NoMount...",
   "selftest_pass": "La autoPrueba de NoMount fue exitosa",
   "selftest_fail": "La autoPrueba de NoMount falló",
-  "selftest_unavailable": "El helper de autoPrueba no está disponible"
+  "selftest_unavailable": "El helper de autoPrueba no está disponible",
+  "selftest_progress_title": "AutoPrueba de NoMount",
+  "selftest_progress_desc": "Comprobaciones y diagnóstico en directo",
+  "selftest_starting": "Iniciando...",
+  "selftest_waiting": "Esperando la salida de la prueba...",
+  "selftest_close": "Cerrar",
+  "selftest_timeout": "La autoPrueba agotó el tiempo tras 3 minutos.",
+  "selftest_read_failed": "No se pudo leer el registro en directo.",
+  "selftest_status_invalid": "La autoPrueba devolvió un estado final no válido.",
+  "selftest_launch_failed": "No se pudo iniciar la autoPrueba"
 }

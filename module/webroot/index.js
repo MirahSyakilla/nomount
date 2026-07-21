@@ -26,7 +26,8 @@ const LOCALE_NAMES = {
     es: 'Español',
     id: 'Bahasa Indonesia',
     zh: '简体中文',
-    ru: 'Русский'
+    ru: 'Русский',
+    tr: 'Türkçe'
 };
 let activeLocale = 'en', translations = {};
 
@@ -107,13 +108,28 @@ const NM_DATA = "/data/adb/nomount";
 const NM_BIN = "/data/adb/modules/nomount/bin/nm";
 const SELFTEST_BIN = "/data/adb/modules/nomount/bin/nomount-selftest";
 const FILES = { verbose: `${NM_DATA}/.verbose`, disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list`, selftestLog: `${NM_DATA}/selftest.log` };
+const SELFTEST_POLL_MS = 350;
+const SELFTEST_TIMEOUT_MS = 180000;
 const APP_ICON_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzgwODA4MCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIvPjwvc3ZnPg==";
 const viewLoadState = { 'view-home': false, 'view-modules': false, 'view-exclusions': false, 'view-options': false };
+let selftestRun = null;
 
-const parseUidList = text => [...new Set((text ?? '').split('\n').map(l => l.trim()).filter(Boolean))];
+const normalizeUidList = uids => [...new Set(uids.map(value => {
+    const uid = String(value ?? '').trim();
+    if (!/^\d+$/.test(uid)) return null;
+    const numericUid = Number(uid);
+    return Number.isSafeInteger(numericUid) && numericUid <= 0xffffffff ? String(numericUid) : null;
+}).filter(Boolean))];
+const parseUidList = text => normalizeUidList(String(text ?? '').split(/[\s,]+/));
+const serializeUidList = uids => {
+    const safe = normalizeUidList(uids);
+    return safe.join('\n');
+};
 const buildWriteUidListCmd = uids => {
-    const safe = [...new Set(uids)].filter(Boolean);
-    return safe.length ? `printf '%s\\n' ${safe} > ${FILES.exclusions}` : `: > ${FILES.exclusions}`;
+    const safe = normalizeUidList(uids);
+    const tempFile = `${FILES.exclusions}.tmp`;
+    const write = safe.length ? `printf '%s\\n' ${safe.join(' ')}` : ':';
+    return `mkdir -p ${NM_DATA} && { ${write} > ${tempFile} && mv -f ${tempFile} ${FILES.exclusions}; }`;
 };
 const renderTextState = (el, cls, text) => { el.className = cls; el.textContent = text; };
 const renderEmptyState = (el, face, text) => el.innerHTML = `<div class="empty-list-placeholder empty-state"><div class="empty-face">${face}</div><div class="empty-text">${text}</div></div>`;
@@ -179,22 +195,14 @@ function applyIcons() {
 }
 
 let cachedMetaTheme = null;
-let cachedSurfaceColor = null;
-function syncSystemBarTheme(isModalOpen = false) {
+function syncSystemBarTheme() {
     if (!cachedMetaTheme) cachedMetaTheme = document.querySelector('meta[name="theme-color"]');
     if (!cachedMetaTheme) return;
 
-    if (isModalOpen) {
-        const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        cachedMetaTheme.setAttribute('content', isDark ? '#0a0a0c' : '#7a7a7a'); 
-    } else {
-        if (!cachedSurfaceColor) {
-            const cs = getComputedStyle(document.documentElement);
-            cachedSurfaceColor = cs.getPropertyValue('--md-sys-color-background').trim() || 
-                                 cs.getPropertyValue('--md-sys-color-surface').trim() || '#ffffff';
-        }
-        cachedMetaTheme.setAttribute('content', cachedSurfaceColor);
-    }
+    const cs = getComputedStyle(document.documentElement);
+    const surfaceColor = cs.getPropertyValue('--md-sys-color-background').trim() ||
+                         cs.getPropertyValue('--md-sys-color-surface').trim();
+    if (surfaceColor) cachedMetaTheme.setAttribute('content', surfaceColor);
 }
 
 const homeUI = {};
@@ -451,40 +459,72 @@ async function loadModule(modId) {
     const script = `
         cd "${modPath}" || exit 0
         find -L system vendor product system_ext odm oem \\( -type c -o -name ".replace" \\) -exec sh -c '
+            mod="$1"; shift
             for f do
                 if [ "\${f##*/}" = ".replace" ]; then
-                    printf "/%s\\0" "\${f%/.replace}"
+                    target="\${f%/.replace}"
                 else
-                    printf "/%s\\0" "$f"
+                    target="$f"
                 fi
+
+                printf "/%s\\0" "$target"
+                case "$target" in
+                    vendor/*|product/*|system_ext/*|odm/*|oem/*)
+                        [ ! -e "$mod/system/$f" ] && [ ! -L "$mod/system/$f" ] && printf "/system/%s\\0" "$target" ;;
+                    system/vendor/*|system/product/*|system/system_ext/*|system/odm/*|system/oem/*)
+                        [ ! -e "$mod/\${f#system/}" ] && [ ! -L "$mod/\${f#system/}" ] && printf "/%s\\0" "\${target#system/}" ;;
+                esac
             done
-        ' _ {} + 2>/dev/null | xargs -0 -r ${NM_BIN} w
+        ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 500 ${NM_BIN} w
         find -L system vendor product system_ext odm oem \\( -type f -o -type l \\) ! -name ".replace" -exec sh -c '
             mod="$1"; shift
             for f do
                 printf "/%s\\0%s/%s\\0" "$f" "$mod" "$f"
+
+                case "$f" in
+                    vendor/*|product/*|system_ext/*|odm/*|oem/*)
+                        [ ! -e "$mod/system/$f" ] && [ ! -L "$mod/system/$f" ] && printf "/system/%s\\0%s/%s\\0" "$f" "$mod" "$f" ;;
+                    system/vendor/*|system/product/*|system/system_ext/*|system/odm/*|system/oem/*)
+                        [ ! -e "$mod/\${f#system/}" ] && [ ! -L "$mod/\${f#system/}" ] && printf "/%s\\0%s/%s\\0" "\${f#system/}" "$mod" "$f" ;;
+                esac
             done
-        ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r ${NM_BIN} a
+        ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 500 ${NM_BIN} add
     `;
     try { await exec(script); } catch (e) { throw e; }
 }
 
 async function unloadModule(modId) {
-    const modPath = `${MOD_DIR}/${modId}`;
-    
-    const script = `
-        cd "${modPath}" || exit 0
-        find -L system vendor product system_ext odm oem \\( -type f -o -type l -o -type c \\) -exec sh -c '
-            for f do
-                if [ "\${f##*/}" = ".replace" ]; then
-                    printf "/%s\\0" "\${f%/.replace}"
-                else
-                    printf "/%s\\0" "$f"
-                fi
-            done
-        ' _ {} + 2>/dev/null | xargs -0 -r ${NM_BIN} d
-    `;
-    try { await exec(script); } catch (e) { throw e; }
+    try {
+        const rules = JSON.parse((await exec(`${NM_BIN} list json`)).stdout || "[]");
+        const targets = rules
+            .filter(rule => rule?.real?.startsWith(`${MOD_DIR}/${modId}/`))
+            .map(rule => rule.virtual);
+
+        const cmdChunks = [];
+        for (let i = 0; i < targets.length; i += 500) {
+            const chunk = targets.slice(i, i + 500).join('\n');
+            cmdChunks.push(`cat << 'EOF' | tr '\\n' '\\0' | xargs -0 -r -n 500 ${NM_BIN} del\n${chunk}\nEOF`);
+        }
+        if (cmdChunks.length) await exec(cmdChunks.join('\n'));
+
+        const modPath = `${MOD_DIR}/${modId}`;
+        await exec(`
+            cd "${modPath}" || exit 0
+            find -L system vendor product system_ext odm oem \\( -type c -o -name ".replace" \\) -exec sh -c '
+                mod="$1"; shift
+                for f do
+                    if [ "\${f##*/}" = ".replace" ]; then target="\${f%/.replace}"; else target="$f"; fi
+                    printf "/%s\\0" "$target"
+                    case "$target" in
+                        vendor/*|product/*|system_ext/*|odm/*|oem/*)
+                            [ ! -e "$mod/system/$f" ] && [ ! -L "$mod/system/$f" ] && printf "/system/%s\\0" "$target" ;;
+                        system/vendor/*|system/product/*|system/system_ext/*|system/odm/*|system/oem/*)
+                            [ ! -e "$mod/\${f#system/}" ] && [ ! -L "$mod/\${f#system/}" ] && printf "/%s\\0" "\${target#system/}" ;;
+                    esac
+                done
+            ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 500 ${NM_BIN} del || true
+        `);
+    } catch (e) { throw e; }
 }
 
 // Apps & Exclusions
@@ -498,7 +538,15 @@ async function loadExclusions() {
     const loadId = ++exclusionsLoadId;
 
     try {
-        const blockedUids = parseUidList((await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`)).stdout);
+        const readResult = await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`);
+        if (readResult.errno !== 0) throw new Error(readResult.stderr || 'Failed to read exclusions');
+
+        const blockedUids = parseUidList(readResult.stdout);
+        if (readResult.stdout !== serializeUidList(blockedUids)) {
+            const migrationResult = await exec(buildWriteUidListCmd(blockedUids));
+            if (migrationResult.errno !== 0) throw new Error(migrationResult.stderr || 'Failed to migrate exclusions');
+        }
+
         if (blockedUids.length > 0) try { await ensureAppsCache(); } catch {}
         const appsMap = new Map(allAppsCache.map(app => [app.uid, app]));
         const htmlArr = blockedUids.map(uid => {
@@ -593,7 +641,6 @@ function openAppSelector() {
     if (!modal) return;
 
     modal.classList.add('active');
-    syncSystemBarTheme(true);
     if (listObserver) listObserver.disconnect();
     document.getElementById('filter-menu').classList.remove('active'); 
     searchInput.value = '';
@@ -601,7 +648,6 @@ function openAppSelector() {
 
     document.getElementById('btn-close-modal').onclick = () => { 
         modal.classList.remove('active'); 
-        syncSystemBarTheme(false);
         if (listObserver) listObserver.disconnect(); 
     };
 
@@ -664,27 +710,215 @@ function renderNextAppBatch() {
 async function removeExclusion(uid, name) {
     showToast(translate('unblocking_name', { name }));
     try {
-        const remainingUids = parseUidList((await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`)).stdout).filter(u => u !== String(uid));
-        await exec(`{ ${buildWriteUidListCmd(remainingUids)} && ${NM_BIN} unblock ${uid}; }`);
-        showToast(translate('blocked_saved'));
+        const uidStr = normalizeUidList([uid])[0];
+        if (!uidStr) throw new Error('Invalid UID');
+
+        const readResult = await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`);
+        if (readResult.errno !== 0) throw new Error(readResult.stderr || 'Failed to read exclusions');
+
+        const remainingUids = parseUidList(readResult.stdout).filter(value => value !== uidStr);
+        const writeResult = await exec(buildWriteUidListCmd(remainingUids));
+        if (writeResult.errno !== 0) throw new Error(writeResult.stderr || 'Failed to update exclusions');
+
+        const unblockResult = await exec(`${NM_BIN} unblock ${uidStr}`);
+        if (unblockResult.errno !== 0) throw new Error(unblockResult.stderr || 'Failed to unblock UID');
     } catch { showToast(translate('error_unblocking')); }
     await loadExclusions();
 }
 
 async function addExclusion(uid, name) {
-    const uidStr = String(uid);
+    const uidStr = normalizeUidList([uid])[0];
+    if (!uidStr) {
+        showToast(translate('error_blocking'));
+        return;
+    }
+
     try {
-        const currentUids = parseUidList((await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`)).stdout);
+        const readResult = await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`);
+        if (readResult.errno !== 0) throw new Error(readResult.stderr || 'Failed to read exclusions');
+
+        const currentUids = parseUidList(readResult.stdout);
         const alreadyBlocked = currentUids.includes(uidStr);
         if (!alreadyBlocked) {
-             await exec(`{ ${buildWriteUidListCmd([...currentUids, uidStr])} && ${NM_BIN} block ${uidStr}; }`);
-             showToast(translate('blocked_saved'));
-        } else {
-             await exec(`${NM_BIN} block ${uidStr}`);
-             showToast(translate('blocked_already'));
+            const writeResult = await exec(buildWriteUidListCmd([...currentUids, uidStr]));
+            if (writeResult.errno !== 0) throw new Error(writeResult.stderr || 'Failed to update exclusions');
         }
+
+        const blockResult = await exec(`${NM_BIN} block ${uidStr}`);
+        if (blockResult.errno !== 0) showToast(translate('blocked_saved'));
+        else showToast(alreadyBlocked ? translate('blocked_already') : translate('blocked', { name }));
     } catch { showToast(translate('error_blocking')); }
     await loadExclusions();
+}
+
+function getSelftestElements() {
+    return {
+        modal: document.getElementById('selftest-modal'),
+        log: document.getElementById('selftest-log'),
+        logWrapper: document.getElementById('selftest-log-wrapper'),
+        state: document.getElementById('selftest-state'),
+        close: document.getElementById('btn-close-selftest')
+    };
+}
+
+function renderSelftestLog(text) {
+    const ui = getSelftestElements();
+    if (!ui.log || !ui.logWrapper) return;
+
+    const distanceFromBottom = ui.logWrapper.scrollHeight - ui.logWrapper.scrollTop - ui.logWrapper.clientHeight;
+    const shouldFollow = distanceFromBottom < 64;
+    ui.log.textContent = text || translate('selftest_waiting');
+    if (shouldFollow) requestAnimationFrame(() => { ui.logWrapper.scrollTop = ui.logWrapper.scrollHeight; });
+}
+
+function appendSelftestLog(message) {
+    const ui = getSelftestElements();
+    const current = ui.log?.textContent || '';
+    const waiting = translate('selftest_waiting');
+    renderSelftestLog(`${current === waiting ? '' : current}${current && current !== waiting ? '\n' : ''}${message}`);
+}
+
+function setSelftestState(kind, text) {
+    const state = getSelftestElements().state;
+    if (!state) return;
+    state.className = `selftest-state ${kind}`;
+    state.textContent = text;
+}
+
+function openSelftestModal() {
+    const ui = getSelftestElements();
+    if (!ui.modal) return;
+
+    ui.modal.classList.add('active');
+    ui.modal.setAttribute('aria-hidden', 'false');
+    if (ui.close) {
+        ui.close.disabled = true;
+        ui.close.onclick = closeSelftestModal;
+    }
+    setSelftestState('running', translate('selftest_starting'));
+    renderSelftestLog(translate('selftest_waiting'));
+}
+
+function closeSelftestModal() {
+    if (selftestRun?.running) return;
+    const ui = getSelftestElements();
+    ui.modal?.classList.remove('active');
+    ui.modal?.setAttribute('aria-hidden', 'true');
+
+    if (selftestRun?.statusPath) {
+        exec(`rm -f ${selftestRun.statusPath} ${selftestRun.statusPath}.tmp`);
+    }
+    selftestRun = null;
+}
+
+function finishSelftest(run, exitCode, extraMessage = '') {
+    if (selftestRun !== run) return;
+    run.running = false;
+    if (run.timer) clearTimeout(run.timer);
+    if (extraMessage) appendSelftestLog(extraMessage);
+
+    const passed = exitCode === 0;
+    setSelftestState(passed ? 'pass' : 'fail', translate(passed ? 'selftest_pass' : 'selftest_fail'));
+    const close = getSelftestElements().close;
+    if (close) close.disabled = false;
+
+    if (run.button) {
+        delete run.button.dataset.busy;
+        run.button.disabled = !run.available;
+    }
+    showToast(translate(passed ? 'selftest_pass' : 'selftest_fail'));
+}
+
+async function pollSelftest(run) {
+    if (selftestRun !== run || !run.running) return;
+    if (Date.now() - run.startedAt > SELFTEST_TIMEOUT_MS) {
+        finishSelftest(run, 124, translate('selftest_timeout'));
+        return;
+    }
+
+    const marker = `__NOMOUNT_SELFTEST_STATUS_${run.id}__=`;
+    const result = await exec(`
+        cat ${FILES.selftestLog} 2>/dev/null || true
+        printf '\\n${marker}'
+        if [ -f ${run.statusPath} ]; then cat ${run.statusPath}; else printf 'RUNNING\\n'; fi
+    `);
+    if (selftestRun !== run || !run.running) return;
+
+    if (result.errno !== 0) {
+        run.pollErrors += 1;
+        if (run.pollErrors >= 3) {
+            finishSelftest(run, result.errno || 1, translate('selftest_read_failed'));
+            return;
+        }
+        run.timer = setTimeout(() => pollSelftest(run), SELFTEST_POLL_MS);
+        return;
+    }
+    run.pollErrors = 0;
+
+    const markerIndex = result.stdout.lastIndexOf(`\n${marker}`);
+    if (markerIndex < 0) {
+        run.timer = setTimeout(() => pollSelftest(run), SELFTEST_POLL_MS);
+        return;
+    }
+
+    const logText = result.stdout.slice(0, markerIndex).replace(/\r/g, '').trimEnd();
+    const status = result.stdout.slice(markerIndex + marker.length + 1).trim().split(/\s+/)[0];
+    renderSelftestLog(logText);
+
+    if (status === 'RUNNING' || status === '') {
+        setSelftestState('running', translate('selftest_running'));
+        run.timer = setTimeout(() => pollSelftest(run), SELFTEST_POLL_MS);
+        return;
+    }
+
+    const exitCode = Number.parseInt(status, 10);
+    finishSelftest(run, Number.isFinite(exitCode) ? exitCode : 1,
+        Number.isFinite(exitCode) ? '' : translate('selftest_status_invalid'));
+}
+
+async function startSelftest(button, available) {
+    if (!available) {
+        showToast(translate('selftest_unavailable'));
+        return;
+    }
+    if (selftestRun?.running) {
+        getSelftestElements().modal?.classList.add('active');
+        return;
+    }
+
+    const id = `${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
+    const run = {
+        id,
+        statusPath: `${NM_DATA}/.selftest-status-${id}`,
+        startedAt: Date.now(),
+        running: true,
+        available,
+        button,
+        timer: null,
+        pollErrors: 0
+    };
+    selftestRun = run;
+
+    openSelftestModal();
+    button.dataset.busy = 'true';
+    button.disabled = true;
+    showToast(translate('selftest_running'));
+
+    const launch = await exec(`
+        mkdir -p ${NM_DATA}
+        rm -f ${run.statusPath} ${run.statusPath}.tmp
+        ( ${SELFTEST_BIN} >/dev/null 2>&1; rc=$?; printf '%s\\n' "$rc" > ${run.statusPath}.tmp; mv -f ${run.statusPath}.tmp ${run.statusPath} ) >/dev/null 2>&1 &
+        printf '%s\\n' "$!"
+    `);
+    if (selftestRun !== run || !run.running) return;
+    if (launch.errno !== 0) {
+        finishSelftest(run, launch.errno || 1, `${translate('selftest_launch_failed')}: ${launch.stderr || launch.stdout || launch.errno}`);
+        return;
+    }
+
+    run.pid = launch.stdout.trim().split(/\s+/)[0];
+    setSelftestState('running', translate('selftest_running'));
+    pollSelftest(run);
 }
 
 // Options
@@ -707,35 +941,22 @@ async function loadOptions() {
     if (btnClear) {
         btnClear.onclick = async () => {
             showToast(translate('clear_rules_toast'));
-            try { await exec(`${NM_BIN} clear`); showToast(translate('clear_rules_done')); loadModules(); loadExclusions(); } catch { showToast(translate('save_failed')); }
+            try {
+                const persistResult = await exec(buildWriteUidListCmd([]));
+                if (persistResult.errno !== 0) throw new Error(persistResult.stderr || 'Failed to clear exclusions');
+                const clearResult = await exec(`${NM_BIN} clear`);
+                if (clearResult.errno !== 0) throw new Error(clearResult.stderr || 'Failed to clear runtime rules');
+                showToast(translate('clear_rules_done'));
+                loadModules();
+                loadExclusions();
+            } catch { showToast(translate('save_failed')); }
         };
     }
 
     if (btnSelftest) {
         const available = (await exec(`[ -x ${SELFTEST_BIN} ] && echo yes`)).stdout.includes('yes');
-        btnSelftest.disabled = !available;
-        btnSelftest.onclick = async () => {
-            if (!available || btnSelftest.dataset.busy) {
-                if (!available) showToast(translate('selftest_unavailable'));
-                return;
-            }
-
-            btnSelftest.dataset.busy = 'true';
-            btnSelftest.disabled = true;
-            showToast(translate('selftest_running'));
-            try {
-                const { errno, stdout, stderr } = await exec(`${SELFTEST_BIN}`);
-                if (errno === 0) {
-                    showToast(translate('selftest_pass'));
-                } else {
-                    console.error('NoMount self-test failed', { errno, stdout, stderr });
-                    showToast(translate('selftest_fail'));
-                }
-            } finally {
-                delete btnSelftest.dataset.busy;
-                btnSelftest.disabled = !available;
-            }
-        };
+        btnSelftest.disabled = !available || !!selftestRun?.running;
+        btnSelftest.onclick = () => startSelftest(btnSelftest, available);
     }
 }
 
@@ -875,7 +1096,6 @@ function initDelegationAndAttach() {
             const label = item.dataset.label;
             if (listObserver) listObserver.disconnect();
             document.getElementById('app-selector-modal')?.classList.remove('active');
-            syncSystemBarTheme(false);
             setTimeout(async () => {
                 await addExclusion(uid, label);
             }, 50);
@@ -885,7 +1105,6 @@ function initDelegationAndAttach() {
     document.getElementById('app-selector-modal')?.addEventListener('click', (e) => {
         if (e.target === e.currentTarget) {
             e.currentTarget.classList.remove('active');
-            syncSystemBarTheme(false);
             if (listObserver) listObserver.disconnect(); 
         }
     });
