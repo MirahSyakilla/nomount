@@ -1,7 +1,7 @@
 id=nomount
 metamodule=true
 name=NoMount
-version=v1.1.0
-versionCode=
+version=v1.1.4
+versionCode=10104
 author=maxsteeel
 description=A metamodule that replaces OverlayFS/MagicMount with VFS path redirection.\nRequires KernelSU-Next with KSU_KPROBES_NOMOUNT.

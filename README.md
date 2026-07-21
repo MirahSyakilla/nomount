@@ -60,9 +60,13 @@ communicating with the KernelSU-hosted `nomount` Generic Netlink family.
 ## Hookless Self-Test
 
 The module includes `bin/nomount-selftest`, also exposed from the WebUI. It
-checks version probing, replacement, cleanup, system directory injection,
-symlink redirects, synthetic nested directories, whiteout, rule listing, and
-clear behavior. The full log is written to:
+checks version probing, malformed-request rejection, canonical paths, live
+rule replacement, visible inode/device identity, virtual `d_path`, directory
+and symlink redirects, system-directory injection, UID isolation, synthetic
+ancestor cleanup, whiteouts, rule listing, and repeated add/delete lifecycle
+handling. The destructive global `clear` command is deliberately excluded.
+The WebUI streams each test stage and its result live. The full log is written
+to:
 
 ```text
 /data/adb/nomount/selftest.log
