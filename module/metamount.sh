@@ -70,35 +70,112 @@ for mod_path in "$MODULES_DIR"/*; do
                             target_dir="/${relative_path%/.replace}"
                             echo "  -> Whiteout: $target_dir" >> "$LOG_FILE"
                             "$LOADER" w "$target_dir" 2>> "$LOG_FILE"
+
+                            case "${relative_path%/.replace}" in
+                                vendor/* | product/* | system_ext/* | odm/* | oem/*)
+                                    if [ ! -e "$mod_path/system/$relative_path" ] && [ ! -L "$mod_path/system/$relative_path" ]; then
+                                        echo "  -> Whiteout (Alias): /system/${relative_path%/.replace}" >> "$LOG_FILE"
+                                        "$LOADER" w "/system/${relative_path%/.replace}" 2>> "$LOG_FILE"
+                                    fi
+                                    ;;
+                                system/vendor/* | system/product/* | system/system_ext/* | system/odm/* | system/oem/*)
+                                    alias_path="/${relative_path#system/}"
+                                    alias_path="${alias_path%/.replace}"
+                                    if [ ! -e "$mod_path/${relative_path#system/}" ] && [ ! -L "$mod_path/${relative_path#system/}" ]; then
+                                        echo "  -> Whiteout (Alias): $alias_path" >> "$LOG_FILE"
+                                        "$LOADER" w "$alias_path" 2>> "$LOG_FILE"
+                                    fi
+                                    ;;
+                            esac
                             continue
                         fi
 
                         if [ -c "$real_path" ]; then
                             echo "  -> Whiteout: $virtual_path" >> "$LOG_FILE"
                             "$LOADER" w "$virtual_path" 2>> "$LOG_FILE"
+
+                            case "$relative_path" in
+                                vendor/* | product/* | system_ext/* | odm/* | oem/*)
+                                    if [ ! -e "$mod_path/system/$relative_path" ] && [ ! -L "$mod_path/system/$relative_path" ]; then
+                                        echo "  -> Whiteout (Alias): /system/$relative_path" >> "$LOG_FILE"
+                                        "$LOADER" w "/system/$relative_path" 2>> "$LOG_FILE"
+                                    fi
+                                    ;;
+                                system/vendor/* | system/product/* | system/system_ext/* | system/odm/* | system/oem/*)
+                                    alias_path="/${relative_path#system/}"
+                                    if [ ! -e "$mod_path$alias_path" ] && [ ! -L "$mod_path$alias_path" ]; then
+                                        echo "  -> Whiteout (Alias): $alias_path" >> "$LOG_FILE"
+                                        "$LOADER" w "$alias_path" 2>> "$LOG_FILE"
+                                    fi
+                                    ;;
+                            esac
                             continue
                         fi
 
                         echo "  -> Inject: $virtual_path" >> "$LOG_FILE"
                         "$LOADER" add "$virtual_path" "$real_path" 2>> "$LOG_FILE"
+
+                        case "$relative_path" in
+                            vendor/* | product/* | system_ext/* | odm/* | oem/*)
+                                if [ ! -e "$mod_path/system/$relative_path" ] && [ ! -L "$mod_path/system/$relative_path" ]; then
+                                    echo "  -> Inject (Alias): /system/$relative_path" >> "$LOG_FILE"
+                                    "$LOADER" add "/system/$relative_path" "$real_path" 2>> "$LOG_FILE"
+                                fi
+                                ;;
+                            system/vendor/* | system/product/* | system/system_ext/* | system/odm/* | system/oem/*)
+                                alias_path="/${relative_path#system/}"
+                                if [ ! -e "$mod_path$alias_path" ] && [ ! -L "$mod_path$alias_path" ]; then
+                                    echo "  -> Inject (Alias): $alias_path" >> "$LOG_FILE"
+                                    "$LOADER" add "$alias_path" "$real_path" 2>> "$LOG_FILE"
+                                fi
+                                ;;
+                        esac
                     done
                 else
                     find -L "$partition" \( -type c -o -name ".replace" \) -exec sh -c '
+                        mod="$1"; shift
                         for f do
                             if [ "${f##*/}" = ".replace" ]; then
-                                printf "/%s\0" "${f%/.replace}"
+                                target="${f%/.replace}"
                             else
-                                printf "/%s\0" "$f"
+                                target="$f"
                             fi
+
+                            printf "/%s\0" "$target"
+                            case "$target" in
+                                vendor/*|product/*|system_ext/*|odm/*|oem/*)
+                                    if [ ! -e "$mod/system/$f" ] && [ ! -L "$mod/system/$f" ]; then
+                                        printf "/system/%s\0" "$target"
+                                    fi
+                                    ;;
+                                system/vendor/*|system/product/*|system/system_ext/*|system/odm/*|system/oem/*)
+                                    if [ ! -e "$mod/${f#system/}" ] && [ ! -L "$mod/${f#system/}" ]; then
+                                        printf "/%s\0" "${target#system/}"
+                                    fi
+                                    ;;
+                            esac
                         done
-                    ' _ {} + 2>/dev/null | xargs -0 -r "$LOADER" w >> "$LOG_FILE" 2>&1
+                    ' _ "$mod_path" {} + 2>/dev/null | xargs -0 -r -n 500 "$LOADER" w >> "$LOG_FILE" 2>&1
 
                     find -L "$partition" \( -type f -o -type l \) ! -name ".replace" -exec sh -c '
                         mod="$1"; shift
                         for f do
                             printf "/%s\0%s/%s\0" "$f" "$mod" "$f"
+
+                            case "$f" in
+                                vendor/*|product/*|system_ext/*|odm/*|oem/*)
+                                    if [ ! -e "$mod/system/$f" ] && [ ! -L "$mod/system/$f" ]; then
+                                        printf "/system/%s\0%s/%s\0" "$f" "$mod" "$f"
+                                    fi
+                                    ;;
+                                system/vendor/*|system/product/*|system/system_ext/*|system/odm/*|system/oem/*)
+                                    if [ ! -e "$mod/${f#system/}" ] && [ ! -L "$mod/${f#system/}" ]; then
+                                        printf "/%s\0%s/%s\0" "${f#system/}" "$mod" "$f"
+                                    fi
+                                    ;;
+                            esac
                         done
-                    ' _ "$mod_path" {} + 2>/dev/null | xargs -0 -r "$LOADER" add >> "$LOG_FILE" 2>&1
+                    ' _ "$mod_path" {} + 2>/dev/null | xargs -0 -r -n 500 "$LOADER" add >> "$LOG_FILE" 2>&1
                 fi
             )
         fi

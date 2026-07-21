@@ -37,8 +37,10 @@ else
   touch "$MODPATH/disable"
 fi
 
-if [ -d "/data/adb/nomount" ]; then
-    rm -rf "/data/adb/nomount"
-fi
+NOMOUNT_DATA="/data/adb/nomount"
+mkdir -p "$NOMOUNT_DATA"
+# Keep exclusions and user options across updates; only the boot marker is
+# transient and must not survive a reinstall.
+rm -f "$NOMOUNT_DATA/.booting"
 
 ui_print "- Installation complete."

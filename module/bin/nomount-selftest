@@ -9,6 +9,18 @@ TMPROOT="/data/local/tmp/$TAG"
 SYSTEM_PARENT=""
 UID_SELF="$(id -u 2>/dev/null || echo 0)"
 CAN_LIST=0
+UID_BLOCKED_BY_TEST=0
+PASS_COUNT=0
+SKIP_COUNT=0
+
+V_SYSTEM=""
+V_LINK=""
+V_SYNTH=""
+V_EXISTING=""
+V_WHITEOUT=""
+V_CANON=""
+V_DIR=""
+V_STRESS=""
 
 mkdir -p "$NM_DATA" >/dev/null 2>&1
 : > "$LOG_FILE"
@@ -17,12 +29,23 @@ log() {
     printf '%s\n' "$*" | tee -a "$LOG_FILE"
 }
 
+stage() {
+    log ""
+    log "TEST: $*"
+}
+
+skip() {
+    SKIP_COUNT=$((SKIP_COUNT + 1))
+    log "SKIP: $*"
+}
+
 fail() {
     log "SELFTEST FAIL: $*"
     exit 1
 }
 
 pass() {
+    PASS_COUNT=$((PASS_COUNT + 1))
     log "PASS: $*"
 }
 
@@ -39,20 +62,32 @@ has_rule() {
 }
 
 has_whiteout_rule() {
-    json_rules | tr -d '\n' | grep -F "\"virtual\": \"$1\"" | grep -F "\"whiteout\": true" >/dev/null 2>&1
+    json_rules | tr -d '\n' | grep -F "\"virtual\": \"$1\"" |
+        grep -F "\"whiteout\": true" >/dev/null 2>&1
 }
 
 require_rule() {
     if [ "$CAN_LIST" -eq 0 ]; then
-        log "SKIP: list json unavailable on this kernel, rule visibility check skipped for $1"
+        skip "list json unavailable; rule visibility check skipped for $1"
         return 0
     fi
     has_rule "$1"
 }
 
+require_no_rule() {
+    if [ "$CAN_LIST" -eq 0 ]; then
+        skip "list json unavailable; rule absence check skipped for $1"
+        return 0
+    fi
+    if has_rule "$1"; then
+        fail "unexpected rule remained for $1"
+    fi
+    pass "rule listing contains no entry for $1"
+}
+
 require_whiteout_rule() {
     if [ "$CAN_LIST" -eq 0 ]; then
-        log "SKIP: list json unavailable on this kernel, whiteout visibility check skipped for $1"
+        skip "list json unavailable; whiteout visibility check skipped for $1"
         return 0
     fi
     has_whiteout_rule "$1"
@@ -71,14 +106,27 @@ assert_text() {
     fail "$desc"
 }
 
+stat_identity() {
+    # /proc/<pid>/fd/N is a procfs symlink.  The metadata test must inspect
+    # its referent, otherwise a healthy implementation is compared against
+    # procfs's own inode and falsely reported as a NoMount leak.
+    stat -L -c '%d:%i' "$1" 2>/dev/null
+}
+
+statfs_identity() {
+    stat -f -c '%t:%i' "$1" 2>/dev/null
+}
+
 cleanup() {
-    "$NM_BIN" unblock "$UID_SELF" >/dev/null 2>&1
+    [ "$UID_BLOCKED_BY_TEST" -eq 1 ] && "$NM_BIN" unblock "$UID_SELF" >/dev/null 2>&1
     [ -n "$V_SYSTEM" ] && "$NM_BIN" del "$V_SYSTEM" >/dev/null 2>&1
     [ -n "$V_LINK" ] && "$NM_BIN" del "$V_LINK" >/dev/null 2>&1
     [ -n "$V_SYNTH" ] && "$NM_BIN" del "$V_SYNTH" >/dev/null 2>&1
     [ -n "$V_EXISTING" ] && "$NM_BIN" del "$V_EXISTING" >/dev/null 2>&1
     [ -n "$V_WHITEOUT" ] && "$NM_BIN" del "$V_WHITEOUT" >/dev/null 2>&1
-    [ -n "$V_CLEAR" ] && "$NM_BIN" del "$V_CLEAR" >/dev/null 2>&1
+    [ -n "$V_CANON" ] && "$NM_BIN" del "$V_CANON" >/dev/null 2>&1
+    [ -n "$V_DIR" ] && "$NM_BIN" del "$V_DIR" >/dev/null 2>&1
+    [ -n "$V_STRESS" ] && "$NM_BIN" del "$V_STRESS" >/dev/null 2>&1
     rm -rf "$TMPROOT"
 }
 
@@ -90,17 +138,15 @@ if [ ! -x "$NM_BIN" ]; then
     fail "nm binary missing at $NM_BIN"
 fi
 
-VERSION="$("$NM_BIN" v 2>/dev/null | tr -d '\r\n')"
+stage "probe netlink version and rule-list capability"
+VERSION="$($NM_BIN v 2>/dev/null | tr -d '\r\n')"
 [ -n "$VERSION" ] || fail "nomount version query failed"
 pass "netlink version query responded with '$VERSION'"
 case "$VERSION" in
     ''|*[!0-9]*) CAN_LIST=0 ;;
     *) [ "$VERSION" -ge 13 ] && CAN_LIST=1 ;;
 esac
-[ "$CAN_LIST" -eq 1 ] || log "SKIP: list json checks require NoMount kernel interface v13+"
-
-INITIAL_RULES="$(json_rules)"
-INITIAL_RULE_COUNT="$(printf '%s\n' "$INITIAL_RULES" | grep -c '"virtual"' 2>/dev/null)"
+[ "$CAN_LIST" -eq 1 ] || skip "list json checks require NoMount kernel interface v13+"
 
 for candidate in /system/etc /vendor/etc /product/etc /system_ext/etc /odm/etc; do
     if [ -d "$candidate" ]; then
@@ -109,19 +155,25 @@ for candidate in /system/etc /vendor/etc /product/etc /system_ext/etc /odm/etc; 
     fi
 done
 
-mkdir -p "$TMPROOT/base" "$TMPROOT/real" || fail "failed to prepare temp tree"
+stage "prepare isolated files and backend types"
+mkdir -p "$TMPROOT/base" "$TMPROOT/real" "$TMPROOT/real/directory" ||
+    fail "failed to prepare temp tree"
 
 printf 'stock-existing\n' > "$TMPROOT/base/existing.txt" || fail "failed to create existing file"
 printf 'whiteout-source\n' > "$TMPROOT/base/whiteout.txt" || fail "failed to create whiteout file"
+printf 'canonical-source\n' > "$TMPROOT/base/canonical-$TAG.txt" || fail "failed to create canonical file"
 printf 'redirect-existing\n' > "$TMPROOT/real/replaced.txt" || fail "failed to create replacement file"
 printf 'redirect-shared\n' > "$TMPROOT/real/shared.txt" || fail "failed to create shared file"
 printf 'symlink-target\n' > "$TMPROOT/real/target.txt" || fail "failed to create symlink target"
+printf 'directory-child\n' > "$TMPROOT/real/directory/child.txt" || fail "failed to create directory backend"
 ln -sf "$TMPROOT/real/target.txt" "$TMPROOT/real/link.lnk" || fail "failed to create real symlink"
 
 V_EXISTING="$TMPROOT/base/existing.txt"
 V_WHITEOUT="$TMPROOT/base/whiteout.txt"
+V_CANON="$TMPROOT/base/canonical-$TAG.txt"
 V_SYNTH="$TMPROOT/virt-$TAG/dir-$TAG/file.txt"
-V_CLEAR="$TMPROOT/base/clear.txt"
+V_DIR="$TMPROOT/base/directory-$TAG"
+V_STRESS="$TMPROOT/base/stress-$TAG.txt"
 V_SYSTEM=""
 V_LINK=""
 if [ -n "$SYSTEM_PARENT" ]; then
@@ -129,53 +181,184 @@ if [ -n "$SYSTEM_PARENT" ]; then
     V_LINK="$SYSTEM_PARENT/$TAG-link"
 fi
 
-"$NM_BIN" add "$V_EXISTING" "$TMPROOT/real/replaced.txt" >/dev/null 2>&1 || fail "failed to add replacement rule"
+stage "reject invalid requests without mutating policy"
+INVALID_BACKEND="$TMPROOT/base/invalid-$TAG.txt"
+if "$NM_BIN" add "$INVALID_BACKEND" "$TMPROOT/real/missing.txt" >/dev/null 2>&1; then
+    fail "missing backend path was accepted"
+fi
+require_no_rule "$INVALID_BACKEND"
+if "$NM_BIN" add / "$TMPROOT/real/shared.txt" >/dev/null 2>&1; then
+    fail "root virtual path was accepted as a file rule"
+fi
+if "$NM_BIN" del "$INVALID_BACKEND" >/dev/null 2>&1; then
+    fail "deleting a nonexistent rule unexpectedly succeeded"
+fi
+pass "invalid backend, root target, and missing-rule operations were rejected"
+
+stage "preserve visible identity and virtual d_path during replacement"
+VISIBLE_ID=""
+BACKEND_ID=""
+if command -v stat >/dev/null 2>&1; then
+    VISIBLE_ID="$(stat -c '%d:%i' "$V_EXISTING" 2>/dev/null)" || fail "failed to stat original replacement target"
+    BACKEND_ID="$(stat -c '%d:%i' "$TMPROOT/real/replaced.txt" 2>/dev/null)" || fail "failed to stat replacement backend"
+    [ "$VISIBLE_ID" != "$BACKEND_ID" ] || fail "replacement metadata test requires distinct source inodes"
+else
+    skip "stat unavailable; replacement inode/device check skipped"
+fi
+
+"$NM_BIN" add "$V_EXISTING" "$TMPROOT/real/replaced.txt" >/dev/null 2>&1 ||
+    fail "failed to add replacement rule"
 assert_text "existing child replacement" "redirect-existing" "$(cat "$V_EXISTING" 2>/dev/null | tr -d '\r\n')"
+if [ -n "$VISIBLE_ID" ]; then
+    assert_text "replacement preserves visible inode/device" "$VISIBLE_ID" "$(stat -c '%d:%i' "$V_EXISTING" 2>/dev/null)"
+fi
+if command -v readlink >/dev/null 2>&1; then
+    exec 9<"$V_EXISTING" || fail "failed to open replacement fd for d_path check"
+    FD_TARGET="$(readlink "/proc/$$/fd/9" 2>/dev/null | tr -d '\r\n')"
+    FD_ID="$(stat_identity "/proc/$$/fd/9")"
+    exec 9<&-
+    assert_text "replacement fd exposes virtual d_path" "$V_EXISTING" "$FD_TARGET"
+    if [ -n "$VISIBLE_ID" ]; then
+        assert_text "replacement fd preserves visible inode/device" "$VISIBLE_ID" "$FD_ID"
+    fi
+else
+    skip "readlink unavailable; replacement d_path check skipped"
+fi
 require_rule "$V_EXISTING" || fail "replacement rule missing from list json"
+
 "$NM_BIN" del "$V_EXISTING" >/dev/null 2>&1 || fail "failed to delete replacement rule"
 assert_text "replacement cleanup restored stock file" "stock-existing" "$(cat "$V_EXISTING" 2>/dev/null | tr -d '\r\n')"
 
+stage "canonicalize repeated slashes and dot components, then refresh replacement"
+CANON_ALIAS="$TMPROOT/base//./sub/../canonical-$TAG.txt"
+"$NM_BIN" add "$V_CANON" "$TMPROOT/real/replaced.txt" >/dev/null 2>&1 ||
+    fail "failed to add canonical-path rule"
+assert_text "canonical path initial content" "redirect-existing" "$(cat "$V_CANON" 2>/dev/null | tr -d '\r\n')"
+"$NM_BIN" add "$CANON_ALIAS" "$TMPROOT/real/shared.txt" >/dev/null 2>&1 ||
+    fail "failed to update canonical-path rule through alias"
+assert_text "canonical alias updates the existing rule" "redirect-shared" "$(cat "$V_CANON" 2>/dev/null | tr -d '\r\n')"
+require_rule "$V_CANON" || fail "canonical rule missing from list json"
+if [ "$CAN_LIST" -eq 1 ] && has_rule "$CANON_ALIAS"; then
+    fail "noncanonical alias was published as a duplicate rule"
+fi
+"$NM_BIN" del "$V_CANON" >/dev/null 2>&1 || fail "failed to delete canonical-path rule"
+assert_text "canonical cleanup restored stock file" "canonical-source" "$(cat "$V_CANON" 2>/dev/null | tr -d '\r\n')"
+
+stage "redirect a real directory and enumerate its children"
+"$NM_BIN" add "$V_DIR" "$TMPROOT/real/directory" >/dev/null 2>&1 ||
+    fail "failed to add directory redirect rule"
+[ -d "$V_DIR" ] || fail "directory redirect did not expose a directory"
+ls "$V_DIR" 2>/dev/null | grep -F child.txt >/dev/null 2>&1 ||
+    fail "directory redirect did not enumerate backend child"
+assert_text "redirected directory child read" "directory-child" \
+    "$(cat "$V_DIR/child.txt" 2>/dev/null | tr -d '\r\n')"
+if command -v stat >/dev/null 2>&1; then
+    CHILD_STAT_INO="$(stat -c '%i' "$V_DIR/child.txt" 2>/dev/null)"
+    CHILD_ENUM_INO="$(ls -i "$V_DIR" 2>/dev/null |
+        awk '$NF == "child.txt" { print $1; exit }')"
+    if [ -n "$CHILD_STAT_INO" ] && [ -n "$CHILD_ENUM_INO" ]; then
+        assert_text "redirected child readdir/stat inode consistency" \
+            "$CHILD_STAT_INO" "$CHILD_ENUM_INO"
+    else
+        skip "could not obtain redirected child inode from stat and ls -i"
+    fi
+else
+    skip "stat unavailable; redirected child inode consistency skipped"
+fi
+require_rule "$V_DIR" || fail "directory rule missing from list json"
+"$NM_BIN" del "$V_DIR" >/dev/null 2>&1 || fail "failed to delete directory redirect rule"
+[ ! -e "$V_DIR" ] || fail "directory redirect remained after delete"
+pass "directory redirect and child enumeration"
+
+stage "inject into a system directory, test UID visibility, and preserve symlinks"
 if [ -n "$V_SYSTEM" ]; then
-    "$NM_BIN" add "$V_SYSTEM" "$TMPROOT/real/shared.txt" >/dev/null 2>&1 || fail "failed to add system-dir injection rule"
+    "$NM_BIN" add "$V_SYSTEM" "$TMPROOT/real/shared.txt" >/dev/null 2>&1 ||
+        fail "failed to add system-dir injection rule"
     assert_text "system directory injected file content" "redirect-shared" "$(cat "$V_SYSTEM" 2>/dev/null | tr -d '\r\n')"
-    ls "$SYSTEM_PARENT" 2>/dev/null | grep -F "${V_SYSTEM##*/}" >/dev/null 2>&1 || fail "system directory readdir did not expose injected file"
+    ls "$SYSTEM_PARENT" 2>/dev/null | grep -F "${V_SYSTEM##*/}" >/dev/null 2>&1 ||
+        fail "system directory readdir did not expose injected file"
     require_rule "$V_SYSTEM" || fail "system directory rule missing from list json"
 
-    if [ "$UID_SELF" = "0" ]; then
-        log "SKIP: uid block test skipped for uid 0 to avoid blocking root/WebUI"
+    VISIBLE_FS_ID="$(statfs_identity "$SYSTEM_PARENT")"
+    INJECTED_FS_ID="$(statfs_identity "$V_SYSTEM")"
+    if [ -n "$VISIBLE_FS_ID" ] && [ -n "$INJECTED_FS_ID" ]; then
+        assert_text "injected file preserves visible filesystem metadata" \
+            "$VISIBLE_FS_ID" "$INJECTED_FS_ID"
     else
-        "$NM_BIN" block "$UID_SELF" >/dev/null 2>&1 || fail "failed to block current uid"
-        [ ! -e "$V_SYSTEM" ] || fail "uid block did not hide injected file lookup"
-        if ls "$SYSTEM_PARENT" 2>/dev/null | grep -F "${V_SYSTEM##*/}" >/dev/null 2>&1; then
-            fail "uid block did not hide injected file from readdir"
-        fi
-        "$NM_BIN" unblock "$UID_SELF" >/dev/null 2>&1 || fail "failed to unblock current uid"
-        assert_text "uid unblock restored injected file" "redirect-shared" "$(cat "$V_SYSTEM" 2>/dev/null | tr -d '\r\n')"
+        skip "stat -f filesystem metadata format unavailable"
     fi
 
-    "$NM_BIN" add "$V_LINK" "$TMPROOT/real/link.lnk" >/dev/null 2>&1 || fail "failed to add symlink redirect rule"
+    if command -v stat >/dev/null 2>&1; then
+        SYSTEM_ENUM_INO="$(ls -i "$SYSTEM_PARENT" 2>/dev/null |
+            awk -v n="${V_SYSTEM##*/}" '$NF == n { print $1; exit }')"
+        SYSTEM_STAT_INO="$(stat -c '%i' "$V_SYSTEM" 2>/dev/null)"
+        if [ -n "$SYSTEM_ENUM_INO" ] && [ -n "$SYSTEM_STAT_INO" ]; then
+            assert_text "injected readdir/stat inode consistency" \
+                "$SYSTEM_STAT_INO" "$SYSTEM_ENUM_INO"
+        else
+            skip "could not obtain injected inode from stat and ls -i"
+        fi
+        # Toybox prints '?' for every metadata column when its dirfd-relative
+        # fstatat() lookup misses an injected entry.  Checking ls -li catches
+        # that real *at() regression instead of only comparing getdents d_ino.
+        SYSTEM_LONG_ENTRY="$(ls -li "$SYSTEM_PARENT" 2>/dev/null |
+            awk -v n="${V_SYSTEM##*/}" '$NF == n { print; exit }')"
+        if [ -n "$SYSTEM_LONG_ENTRY" ]; then
+            case "$SYSTEM_LONG_ENTRY" in
+                *'?'*) fail "injected directory-fd metadata lookup" ;;
+                *) pass "injected directory-fd metadata lookup" ;;
+            esac
+        else
+            skip "could not obtain injected ls -li entry"
+        fi
+    fi
+
+    if [ "$UID_SELF" = "0" ]; then
+        skip "uid block test skipped for uid 0 to avoid blocking root/WebUI"
+    else
+        if "$NM_BIN" block "$UID_SELF" >/dev/null 2>&1; then
+            UID_BLOCKED_BY_TEST=1
+            [ ! -e "$V_SYSTEM" ] || fail "uid block did not hide injected file lookup"
+            if ls "$SYSTEM_PARENT" 2>/dev/null | grep -F "${V_SYSTEM##*/}" >/dev/null 2>&1; then
+                fail "uid block did not hide injected file from readdir"
+            fi
+            "$NM_BIN" unblock "$UID_SELF" >/dev/null 2>&1 || fail "failed to unblock current uid"
+            UID_BLOCKED_BY_TEST=0
+            assert_text "uid unblock restored injected file" "redirect-shared" "$(cat "$V_SYSTEM" 2>/dev/null | tr -d '\r\n')"
+        else
+            skip "uid block test skipped because the current UID was already blocked"
+        fi
+    fi
+
+    "$NM_BIN" add "$V_LINK" "$TMPROOT/real/link.lnk" >/dev/null 2>&1 ||
+        fail "failed to add symlink redirect rule"
     assert_text "symlink redirect preserves target content" "symlink-target" "$(cat "$V_LINK" 2>/dev/null | tr -d '\r\n')"
     if command -v readlink >/dev/null 2>&1; then
         assert_text "symlink redirect preserves link target" "$TMPROOT/real/target.txt" "$(readlink "$V_LINK" 2>/dev/null | tr -d '\r\n')"
     else
-        log "SKIP: readlink not available, symlink target text check skipped"
+        skip "readlink unavailable; symlink target text check skipped"
     fi
     require_rule "$V_LINK" || fail "symlink rule missing from list json"
     "$NM_BIN" del "$V_LINK" >/dev/null 2>&1 || fail "failed to delete symlink rule"
     "$NM_BIN" del "$V_SYSTEM" >/dev/null 2>&1 || fail "failed to delete system-dir injection rule"
 else
-    log "SKIP: no readable system/vendor/etc parent found for system-dir and symlink tests"
+    skip "no readable system/vendor/etc parent found; system-dir tests skipped"
 fi
 
-"$NM_BIN" add "$V_SYNTH" "$TMPROOT/real/shared.txt" >/dev/null 2>&1 || fail "failed to add synthetic ancestor rule"
+stage "create and prune synthetic ancestor directories"
+"$NM_BIN" add "$V_SYNTH" "$TMPROOT/real/shared.txt" >/dev/null 2>&1 ||
+    fail "failed to add synthetic ancestor rule"
 assert_text "synthetic nested lookup content" "redirect-shared" "$(cat "$V_SYNTH" 2>/dev/null | tr -d '\r\n')"
-ls "$(dirname "$V_SYNTH")" 2>/dev/null | grep -F "${V_SYNTH##*/}" >/dev/null 2>&1 || fail "synthetic leaf directory readdir missing injected file"
-ls "$(dirname "$(dirname "$V_SYNTH")")" 2>/dev/null | grep -F "$(basename "$(dirname "$V_SYNTH")")" >/dev/null 2>&1 || fail "synthetic ancestor readdir missing child directory"
+ls "$(dirname "$V_SYNTH")" 2>/dev/null | grep -F "${V_SYNTH##*/}" >/dev/null 2>&1 ||
+    fail "synthetic leaf directory readdir missing injected file"
+ls "$(dirname "$(dirname "$V_SYNTH")")" 2>/dev/null | grep -F "$(basename "$(dirname "$V_SYNTH")")" >/dev/null 2>&1 ||
+    fail "synthetic ancestor readdir missing child directory"
 require_rule "$V_SYNTH" || fail "synthetic rule missing from list json"
 "$NM_BIN" del "$V_SYNTH" >/dev/null 2>&1 || fail "failed to delete synthetic rule"
 [ ! -e "$(dirname "$(dirname "$V_SYNTH")")" ] || fail "synthetic ancestor was not pruned after delete"
 pass "synthetic ancestor cleanup pruned intermediate directories"
 
+stage "hide and restore an existing file with a whiteout rule"
 "$NM_BIN" w "$V_WHITEOUT" >/dev/null 2>&1 || fail "failed to add whiteout rule"
 [ ! -e "$V_WHITEOUT" ] || fail "whiteout did not hide existing file lookup"
 if ls "$TMPROOT/base" 2>/dev/null | grep -F "whiteout.txt" >/dev/null 2>&1; then
@@ -185,20 +368,22 @@ require_whiteout_rule "$V_WHITEOUT" || fail "whiteout rule missing from list jso
 "$NM_BIN" del "$V_WHITEOUT" >/dev/null 2>&1 || fail "failed to delete whiteout rule"
 assert_text "whiteout cleanup restored file" "whiteout-source" "$(cat "$V_WHITEOUT" 2>/dev/null | tr -d '\r\n')"
 
-if [ "$INITIAL_RULE_COUNT" -eq 0 ]; then
-    printf 'clear-target\n' > "$TMPROOT/real/clear.txt" || fail "failed to create clear target"
-    "$NM_BIN" add "$V_CLEAR" "$TMPROOT/real/clear.txt" >/dev/null 2>&1 || fail "failed to add clear test rule"
-    has_rule "$V_CLEAR" || fail "clear test rule missing before clear"
-    "$NM_BIN" clear >/dev/null 2>&1 || fail "nm clear failed in empty baseline mode"
-    [ ! -e "$V_CLEAR" ] || fail "nm clear did not remove injected lookup"
-    if has_rule "$V_CLEAR"; then
-        fail "nm clear did not purge test rule from list json"
-    fi
-    V_CLEAR=""
-    pass "clear command removed all rules in empty baseline mode"
-else
-    log "SKIP: clear command test skipped because $INITIAL_RULE_COUNT pre-existing rule(s) were present"
-fi
+stage "repeat rule add, read, and delete to exercise lifecycle reclamation"
+printf 'stress-source\n' > "$V_STRESS" || fail "failed to create stress target"
+i=1
+while [ "$i" -le 8 ]; do
+    "$NM_BIN" add "$V_STRESS" "$TMPROOT/real/shared.txt" >/dev/null 2>&1 ||
+        fail "stress add failed at iteration $i"
+    assert_text "stress iteration $i read" "redirect-shared" "$(cat "$V_STRESS" 2>/dev/null | tr -d '\r\n')"
+    "$NM_BIN" del "$V_STRESS" >/dev/null 2>&1 || fail "stress delete failed at iteration $i"
+    assert_text "stress iteration $i cleanup" "stress-source" "$(cat "$V_STRESS" 2>/dev/null | tr -d '\r\n')"
+    i=$((i + 1))
+done
+require_no_rule "$V_STRESS"
+pass "eight repeated add/read/delete cycles completed"
 
+log ""
+log "SKIP: clear command is intentionally not self-tested because it is global and destructive"
+log "SUMMARY: passes=$PASS_COUNT skips=$SKIP_COUNT"
 log "SELFTEST PASS: NoMount hookless features look healthy"
 exit 0
