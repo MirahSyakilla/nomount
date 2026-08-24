@@ -940,14 +940,22 @@ static struct nomount_dir_node *__nomount_alloc_dir_node(struct inode *inode)
 static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, struct nomount_rule *rule, const char *name, size_t name_len)
 {
     struct nomount_child_array *new_arr, *old_arr;
-    struct nomount_child_node *new_child;
+    struct nomount_child_node *new_child, *existing_child;
     int old_count, capacity, new_cap, pos = 0;
     u32 target_hash;
 
-    if (unlikely(!dir_node || !(new_child = kmalloc(sizeof(*new_child) + name_len + 1, GFP_KERNEL)))) return;
+    if (unlikely(!dir_node)) return;
+
+    target_hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name, name_len);
+    if ((old_arr = dir_node->children) && (existing_child = nomount_bsearch_child(old_arr, name, name_len, target_hash))) {
+        existing_child->rule = rule;
+        rule->parent_dir = dir_node;
+        return;
+    }
+
+    if (unlikely(!(new_child = kmalloc(sizeof(*new_child) + name_len + 1, GFP_KERNEL)))) return;
 
     rule->parent_dir = dir_node;
-    target_hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name, name_len);
     new_child->fake_ino = rule->v_hash;
     new_child->name_hash = target_hash;
     new_child->d_type = (rule->flags & NM_FLAG_IS_DIR) ? DT_DIR : DT_REG;
@@ -956,7 +964,6 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
     new_child->rule = rule;
     memcpy(new_child->name, name, name_len);
     new_child->name[name_len] = '\0';
-    old_arr = dir_node->children;
     old_count = old_arr ? old_arr->count : 0;
     capacity = old_arr ? old_arr->capacity : 0;
 
