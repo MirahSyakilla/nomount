@@ -846,7 +846,29 @@ async function refreshCurrentView() {
 }
 
 function initDelegationAndAttach() {
-     document.getElementById('modules-list')?.addEventListener('change', (e) => {
+    const updateModuleCardDOM = async (card, modId) => {
+        const { stdout } = await exec(`${NM_BIN} rule list --json 2>/dev/null`);
+        const activeRules = JSON.parse(stdout.trim() || "[]");
+        let newFileCount = 0;
+        activeRules.forEach(r => { if (r?.real?.startsWith(`${MOD_DIR}/${modId}/`)) newFileCount++; });
+        const nowLoaded = newFileCount > 0;
+        const toggleChecked = card.querySelector('.switch-input').checked;
+        const statusKey = nowLoaded ? (toggleChecked ? 'status_loaded' : 'status_active') : (toggleChecked ? 'status_inactive' : 'status_disabled');
+        card.querySelector('.file-count span').textContent = translate('modules_injected_files', { count: newFileCount });
+        card.querySelector('.module-info p').textContent = `${translate('status_label')}: ${translate(statusKey)}`;
+        const hotBtn = card.querySelector('.btn-hot-action');
+        const btnSpan = hotBtn.querySelector('span');
+
+        if (nowLoaded) {
+            hotBtn.classList.add('unload');
+            btnSpan.textContent = translate('modules_hot_unload');
+        } else {
+            hotBtn.classList.remove('unload');
+            btnSpan.textContent = translate('modules_hot_load');
+        }
+    };
+
+    document.getElementById('modules-list')?.addEventListener('change', (e) => {
         const toggle = e.target.closest('.switch-input');
         if (toggle) {
             const labelContainer = toggle.closest('.custom-switch');
@@ -854,19 +876,24 @@ function initDelegationAndAttach() {
                 e.preventDefault();
                 return;
             }
-            const modId = toggle.closest('.module-card').dataset.moduleId;
+            const card = toggle.closest('.module-card');
+            const modId = card.dataset.moduleId;
             labelContainer.dataset.busy = 'true';
             labelContainer.classList.add('switch-busy');
             const isChecked = toggle.checked;
+
             setTimeout(async () => {
                 try {
                     if (isChecked) { await exec(`rm ${MOD_DIR}/${modId}/disable`); await loadModule(modId); }
                     else { await unloadModule(modId); await exec(`touch ${MOD_DIR}/${modId}/disable`); }
+                    await updateModuleCardDOM(card, modId);
+                } catch (err) {
+                    showToast(`Error: ${err.message}`);
+                    toggle.checked = !isChecked;
                 } finally {
-                    await new Promise(r => setTimeout(r, 200));
                     labelContainer.classList.remove('switch-busy');
                     delete labelContainer.dataset.busy;
-                    loadModules();
+                    loadHome();
                 }
             }, 0);
         }
@@ -879,9 +906,23 @@ function initDelegationAndAttach() {
             const card = hotBtn.closest('.module-card');
             const modId = card.dataset.moduleId;
             const isLoaded = hotBtn.classList.contains('unload');
+            const btnSpan = hotBtn.querySelector('span');
+            const originalText = btnSpan.textContent;
+            btnSpan.textContent = translate('loading') || '...';
+
             setTimeout(async () => {
-                try { isLoaded ? await unloadModule(modId) : await loadModule(modId); } 
-                finally { loadModules(); }
+                try {
+                    isLoaded ? await unloadModule(modId) : await loadModule(modId);
+                    await updateModuleCardDOM(card, modId);
+                }
+                catch (err) {
+                    showToast(`Error: ${err.message}`);
+                    btnSpan.textContent = originalText;
+                }
+                finally {
+                    hotBtn.disabled = false;
+                    loadHome();
+                }
             }, 0);
         }
     });
