@@ -478,13 +478,19 @@ async function loadModule(modId) {
     const modPath = `${MOD_DIR}/${modId}`;
     const script = `
         cd "${modPath}" || exit 0
-        find -L system vendor product system_ext odm oem \\( -type c -o -name ".replace" \\) -exec sh -c '
+        find -L system vendor product system_ext odm oem \\( -type d -o -type c -o -name ".replace" \\) -exec sh -c '
             for f do
                 v="$f"; [ "\${v#system/odm/}" != "$v" ] && v="odm/\${v#system/odm/}"
-                if [ "\${f##*/}" = ".replace" ]; then printf "/%s\\0" "\${v%/.replace}"
-                else printf "/%s\\0" "$v"; fi
+                if [ -d "$f" ]; then
+                    getfattr -n trusted.overlay.opaque "$f" 2>/dev/null | grep -q "=\\"y\\"" && printf "/%s\\0" "$v"
+                elif [ "\${f##*/}" = ".replace" ]; then
+                    printf "/%s\\0" "\${v%/.replace}"
+                else
+                    printf "/%s\\0" "$v"
+                fi
             done
         ' _ {} + 2>/dev/null | xargs -0 -r ${NM_BIN} rule add --whiteout
+
         find -L system vendor product system_ext odm oem \\( -type f -o -type l \\) ! -name ".replace" -exec sh -c '
             mod="$1"; shift
             for f do
@@ -500,11 +506,16 @@ async function unloadModule(modId) {
     const modPath = `${MOD_DIR}/${modId}`;
     const script = `
         cd "${modPath}" || exit 0
-        find -L system vendor product system_ext odm oem \\( -type f -o -type l -o -type c \\) -exec sh -c '
+        find -L system vendor product system_ext odm oem \\( -type f -o -type l -o -type c -o -type d \\) -exec sh -c '
             for f do
                 v="$f"; [ "\${v#system/odm/}" != "$v" ] && v="odm/\${v#system/odm/}"
-                if [ "\${f##*/}" = ".replace" ]; then printf "/%s\\0" "\${v%/.replace}"
-                else printf "/%s\\0" "$v"; fi
+                if [ -d "$f" ]; then
+                    getfattr -n trusted.overlay.opaque "$f" 2>/dev/null | grep -q "=\\"y\\"" && printf "/%s\\0" "$v"
+                elif [ "\${f##*/}" = ".replace" ]; then
+                    printf "/%s\\0" "\${v%/.replace}"
+                else
+                    printf "/%s\\0" "$v"
+                fi
             done
         ' _ {} + 2>/dev/null | xargs -0 -r ${NM_BIN} rule del
     `;

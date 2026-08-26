@@ -98,7 +98,7 @@ for mod_path in "$MODULES_DIR"/*; do
             (
                 cd "$mod_path" || exit
                 if $VERBOSE; then
-                    find -L "$partition" \( -type f -o -type l -o -type c \) 2>/dev/null | while read -r relative_path; do
+                    find -L "$partition" \( -type f -o -type l -o -type c -o -type d \) 2>/dev/null | while read -r relative_path; do
                         real_path="$mod_path/$relative_path"
                         v_path="$relative_path"
 
@@ -114,6 +114,14 @@ for mod_path in "$MODULES_DIR"/*; do
                             continue
                         fi
 
+                        if [ -d "$real_path" ]; then
+                            if getfattr -n trusted.overlay.opaque "$real_path" 2>/dev/null | grep -q '="y"'; then
+                                echo "  -> Whiteout (Opaque Dir): $virtual_path" >> "$LOG_FILE"
+                                "$LOADER" rule add --whiteout "$virtual_path" 2>> "$LOG_FILE"
+                            fi
+                            continue 
+                        fi
+
                         if [ -c "$real_path" ]; then
                             echo "  -> Whiteout: $virtual_path" >> "$LOG_FILE"
                             "$LOADER" rule add --whiteout "$virtual_path" 2>> "$LOG_FILE"
@@ -124,11 +132,16 @@ for mod_path in "$MODULES_DIR"/*; do
                         "$LOADER" rule add "$virtual_path" "$real_path" 2>> "$LOG_FILE"
                     done
                 else
-                    find -L "$partition" \( -type c -o -name ".replace" \) -exec sh -c '
+                    find -L "$partition" \( -type d -o -type c -o -name ".replace" \) -exec sh -c '
                         for f do
                             v="$f"; [ "${v#system/odm/}" != "$v" ] && v="odm/${v#system/odm/}"
-                            if [ "${f##*/}" = ".replace" ]; then printf "/%s\0" "${v%/.replace}"
-                            else printf "/%s\0" "$v"; fi
+                            if [ -d "$f" ]; then
+                                getfattr -n trusted.overlay.opaque "$f" 2>/dev/null | grep -q "=\"y\"" && printf "/%s\0" "$v"
+                            elif [ "${f##*/}" = ".replace" ]; then
+                                printf "/%s\0" "${v%/.replace}"
+                            else
+                                printf "/%s\0" "$v"
+                            fi
                         done
                     ' _ {} + 2>/dev/null | xargs -0 -r "$LOADER" rule add --whiteout >> "$LOG_FILE" 2>&1
 
