@@ -591,6 +591,19 @@ async function loadExclusions() {
 
 async function ensureAppsCache(force = false) {
     if (!force && allAppsCache.length > 0) return;
+
+    if (!force) {
+        try {
+            const cachedApps = localStorage.getItem('nm_apps_cache');
+            if (cachedApps) {
+                allAppsCache = JSON.parse(cachedApps);
+                return;
+            }
+        } catch (e) {
+            console.warn("Failed to load apps from LocalStorage, fetching fresh data...", e);
+        }
+    }
+
     if (appLoadingPromise) {
         await appLoadingPromise;
         if (!force || allAppsCache.length > 0) return;
@@ -625,11 +638,18 @@ async function ensureAppsCache(force = false) {
             }
 
             allAppsCache = tempCache.map(app => ({
-                ...app, 
-                appLabel: app.appLabel || app.packageName, 
                 uid: String(app.uid),
+                packageName: app.packageName,
+                appLabel: app.appLabel || app.packageName,
+                isSystem: Boolean(app.isSystem),
                 _search: (app.appLabel || app.packageName).toLowerCase() + app.packageName.toLowerCase()
             })).sort((a, b) => a.appLabel < b.appLabel ? -1 : (a.appLabel > b.appLabel ? 1 : 0));
+
+            try {
+                localStorage.setItem('nm_apps_cache', JSON.stringify(allAppsCache));
+            } catch (e) {
+                console.warn("Failed to save apps cache to LocalStorage. Data might be too large.", e);
+            }
 
         } catch (e) {
             console.error("Error in ensureAppsCache:", e);
