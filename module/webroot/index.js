@@ -736,7 +736,7 @@ function renderNextAppBatch() {
     if (lastEl && listObserver) listObserver.observe(lastEl);
 }
 
-async function removeExclusion(uid, name) {
+async function removeExclusion(uid, name, domItem) {
     showToast(translate('unblocking_name', { name }));
     try {
         const unblockResult = await exec(`${NM_BIN} uid del ${uid}`);
@@ -744,9 +744,15 @@ async function removeExclusion(uid, name) {
         const currentData = await readExclusionsJson();
         const newData = currentData.filter(app => String(app.uid) !== String(uid));
         await writeExclusionsJson(newData);
-    } catch { showToast(translate('error_unblocking')); }
-
-    await loadExclusions();
+        domItem.remove();
+        const listContainer = document.getElementById('exclusions-list');
+        if (listContainer.children.length === 0)
+            renderEmptyState(listContainer, '(._.)', translate('no_exclusions_yet'));
+    } catch {
+        showToast(translate('error_unblocking'));
+        domItem.style.opacity = '1';
+        domItem.style.pointerEvents = 'auto';
+    }
 }
 
 async function addExclusion(uid, label, pkg) {
@@ -967,7 +973,7 @@ function initDelegationAndAttach() {
             item.style.opacity = '0.5';
             item.style.pointerEvents = 'none';
             setTimeout(() => {
-                removeExclusion(uid, label);
+                removeExclusion(uid, label, item);
             }, 0);
         }
     });
