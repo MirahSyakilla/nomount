@@ -134,7 +134,7 @@ function renderLanguagePicker() {
 const MOD_DIR = "/data/adb/modules";
 const NM_DATA = "/data/adb/nomount";
 const NM_BIN = "/data/adb/modules/nomount/bin/nm";
-const FILES = { verbose: `${NM_DATA}/.verbose`, disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list` };
+const FILES = { verbose: `${NM_DATA}/.verbose`, disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list.json` };
 const APP_ICON_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzgwODA4MCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIvPjwvc3ZnPg==";
 const viewLoadState = { 'view-home': false, 'view-modules': false, 'view-exclusions': false, 'view-options': false };
 
@@ -527,6 +527,21 @@ let allAppsCache = [], showSystemApps = false,
     appLoadingPromise = null, currentlyDisplayedApps = [],
     appListRenderIndex = 0, listObserver = null, filterTimeout, exclusionsLoadId = 0;
 
+async function readExclusionsJson() {
+    try {
+        const { stdout } = await exec(`cat ${FILES.exclusions} 2>/dev/null || echo "[]"`);
+        const parsed = JSON.parse(stdout.trim());
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) { return []; }
+}
+
+async function writeExclusionsJson(dataArray) {
+    const jsonStr = JSON.stringify(dataArray);
+    const b64 = btoa(unescape(encodeURIComponent(jsonStr))); 
+    const cmd = `mkdir -p ${NM_DATA} && echo "${b64}" | base64 -d > ${FILES.exclusions}.tmp && mv -f ${FILES.exclusions}.tmp ${FILES.exclusions}`;
+    return await exec(cmd);
+}
+
 async function loadExclusions() {
     const listContainer = document.getElementById('exclusions-list');
     if (!listContainer) return;
@@ -534,22 +549,19 @@ async function loadExclusions() {
 
     try {
         const { stdout } = await exec(`${NM_BIN} uid list 2>/dev/null`);
-
         let blockedUids = [];
         try {
             const parsed = JSON.parse(stdout.trim());
             if (Array.isArray(parsed)) blockedUids = parsed.map(String);
-        } catch (e) { 
-            console.warn("No UIDs found or parse error");
-        }
+        } catch (e) { console.warn("No UIDs found or parse error"); }
 
-        if (blockedUids.length > 0) try { await ensureAppsCache(); } catch {}
+        const savedData = await readExclusionsJson();
+        const appsMap = new Map(savedData.map(app => [String(app.uid), app]));
 
-        const appsMap = new Map(allAppsCache.map(app => [app.uid, app]));
         const htmlArr = blockedUids.map(uid => {
             const app = appsMap.get(uid);
-            const label = app ? app.appLabel : `UID: ${uid}`;
-            const pkg = app ? app.packageName : 'System/Unknown';
+            const label = app ? app.label : `UID: ${uid}`;
+            const pkg = app ? app.pkg : 'System/Unknown';
             return `
                 <div class="card setting-item" data-uid="${uid}" data-label="${label}">
                     <div class="exclusion-app">
@@ -691,7 +703,7 @@ function renderNextAppBatch() {
     }
 
     const htmlStr = batch.map(app => `
-        <div class="app-item segment-card" data-uid="${app.uid}" data-label="${app.appLabel}">
+        <div class="app-item segment-card" data-uid="${app.uid}" data-label="${app.appLabel}" data-pkg="${app.packageName}">
             <img src="ksu://icon/${app.packageName}" class="app-icon-img" loading="lazy" onerror="this.src='${APP_ICON_FALLBACK}'" />
             <div class="app-details"><div class="app-name">${app.appLabel}</div><div class="app-pkg">${app.packageName}</div></div>
             <div class="app-meta"><div class="uid-label">UID: ${app.uid}</div>${app.isSystem ? '<span class="system-chip">SYS</span>' : ''}</div>
@@ -709,32 +721,31 @@ async function removeExclusion(uid, name) {
     try {
         const unblockResult = await exec(`${NM_BIN} uid del ${uid}`);
         if (unblockResult.errno !== 0) throw new Error(unblockResult.stderr || 'Failed to unblock UID');
-        const remainingUids = parseUidList((await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`)).stdout).filter(u => u !== String(uid));
-        await exec(buildWriteUidListCmd(remainingUids));
+        const currentData = await readExclusionsJson();
+        const newData = currentData.filter(app => String(app.uid) !== String(uid));
+        await writeExclusionsJson(newData);
     } catch { showToast(translate('error_unblocking')); }
 
     await loadExclusions();
 }
 
-async function addExclusion(uid, name) {
-    const uidStr = normalizeUidList([uid])[0];
-    if (!uidStr) {
-        showToast(translate('error_blocking'));
-        return;
-    }
+async function addExclusion(uid, label, pkg) {
+    const uidStr = String(uid).trim();
+    if (!uidStr) return showToast(translate('error_blocking'));
 
     try {
-        const currentUids = parseUidList((await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`)).stdout);
-        const alreadyBlocked = currentUids.includes(uidStr);
-        if (!alreadyBlocked) {
-            const persistResult = await exec(buildWriteUidListCmd([...currentUids, uidStr]));
-            if (persistResult.errno !== 0) throw new Error(persistResult.stderr || 'Failed to save exclusion');
+        const currentData = await readExclusionsJson();
+        const alreadySaved = currentData.some(app => String(app.uid) === uidStr);
+        const blockResult = await exec(`${NM_BIN} uid add ${uidStr}`);
+        if (!alreadySaved) {
+            currentData.push({ uid: uidStr, label: label, pkg: pkg });
+            const persistResult = await writeExclusionsJson(currentData);
+            if (persistResult.errno !== 0) throw new Error(persistResult.stderr || 'Failed to save exclusion metadata');
         }
 
-        const blockResult = await exec(`${NM_BIN} uid add ${uidStr}`);
-        if (alreadyBlocked) showToast(translate('blocked_already'));
+        if (alreadySaved) showToast(translate('blocked_already'));
         else if (blockResult.errno !== 0) showToast(translate('blocked_saved'));
-        else showToast(translate('blocked', { name }));
+        else showToast(translate('blocked', { name: label }));
     } catch { showToast(translate('error_blocking')); }
 
     await loadExclusions();
@@ -760,8 +771,8 @@ async function loadOptions() {
         btnClear.onclick = async () => {
             showToast(translate('clear_rules_toast'));
             try {
-                const persistResult = await exec(buildWriteUidListCmd([]));
-                if (persistResult.errno !== 0) throw new Error(persistResult.stderr || 'Failed to clear exclusions');
+                const persistResult = await writeExclusionsJson([]); 
+                if (persistResult.errno !== 0) throw new Error(persistResult.stderr || 'Failed to clear exclusions cache');
                 const clearResult = await exec(`${NM_BIN} clear all`);
                 if (clearResult.errno !== 0) throw new Error(clearResult.stderr || 'Failed to clear runtime rules');
                 showToast(translate('clear_rules_done'));
@@ -947,10 +958,11 @@ function initDelegationAndAttach() {
             item.dataset.busy = 'true';
             const uid = item.dataset.uid;
             const label = item.dataset.label;
+            const pkg = item.dataset.pkg;
             if (listObserver) listObserver.disconnect();
             document.getElementById('app-selector-modal')?.classList.remove('active');
             setTimeout(async () => {
-                await addExclusion(uid, label);
+                await addExclusion(uid, label, pkg);
             }, 50);
         }
     });
