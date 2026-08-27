@@ -157,6 +157,21 @@
         </button>
     </div>
 
+    <div id="uid-input-modal" class="modal-overlay">
+        <div class="md-dialog">
+            <h3 class="md-dialog-title" data-i18n="enter_manual_uid">Enter UID manually</h3>
+            <div class="md-dialog-content">
+                <div class="md-text-field">
+                    <input type="number" id="manual-uid-input" placeholder="e.g. 10123" pattern="\d*">
+                </div>
+            </div>
+            <div class="md-dialog-actions">
+                <button class="btn-text" id="btn-cancel-uid" data-i18n="cancel">Cancel</button>
+                <button class="btn-text primary" id="btn-confirm-uid" data-i18n="add">Add</button>
+            </div>
+        </div>
+    </div>
+
     <div id="app-selector-modal" class="modal-overlay">
         <div class="modal-content">
             <div class="modal-header">
@@ -188,6 +203,9 @@
             </div>
 
             <div class="app-list-wrapper">
+                <button class="custom-fab modal-fab" id="modal-fab-action" aria-label="Manual UID/Batch Add">
+                    <md-icon>edit</md-icon>
+                </button>
                 <div id="app-modal-refresh-indicator" class="pull-to-refresh-indicator">
                     <md-icon>refresh</md-icon>
                 </div>

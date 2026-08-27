@@ -179,6 +179,8 @@ const ICON_PATHS = {
     settings_suggest: 'm697-696-56-26q-12-5-12-18t12-18l56-26 26-56q5-12 18-12t18 12l26 56 56 26q12 5 12 18t-12 18l-56 26-26 56q-5 12-18 12t-18-12l-26-56Zm92 308-49-23q-6-3-6-9t6-9l49-23 23-49q3-6 9-6t9 6l23 49 49 23q6 3 6 9t-6 9l-49 23-23 49q-3 6-9 6t-9-6l-23-49ZM336-80q-15 0-26-10t-13-25l-8-59q-7-3-15-8t-13-10l-55 24q-14 6-28.5 1.5T155-185L91-297q-8-14-4.5-28.5T102-349l47-35v-32l-47-35q-12-9-15.5-23.5T91-503l64-112q8-14 22.5-18.5T206-632l55 24q5-5 13-10t15-8l8-59q2-15 13-25t26-10h130q15 0 26 10t13 25l8 59q7 3 15 8t13 10l55-24q14-6 28.5-1.5T647-615l64 112q8 14 4.5 28.5T700-451l-47 35v32l47 35q12 9 15.5 23.5T711-297l-64 112q-8 14-22.5 18.5T596-168l-55-24q-5 5-13 10t-15 8l-8 59q-2 15-13 25t-26 10H336Zm150-235q35-35 35-85t-35-85q-35-35-85-35t-85 35q-35 35-35 85t35 85q35 35 85 35t85-35ZM371-160h60l8-72q29-8 49.5-20.5T529-286l66 30 28-50-58-44q8-23 8-50t-8-50l58-44-28-50-66 30q-20-21-40.5-33.5T439-568l-8-72h-60l-8 72q-29 8-49.5 20.5T273-514l-66-30-28 50 58 44q-8 23-8.5 50t8.5 50l-58 44 28 50 66-30q20 21 40.5 33.5T363-232l8 72Zm30-240Z',
     shield: 'M467-85q-6-1-12-3-135-45-215-166.5T160-516v-189q0-25 14.5-45t37.5-29l240-90q14-5 28-5t28 5l240 90q23 9 37.5 29t14.5 45v189q0 140-80 261.5T505-88q-6 2-12 3t-13 1q-7 0-13-1Zm13-79q104-33 172-132t68-220v-189l-240-90-240 90v189q0 121 68 220t172 132Zm0-316Z',
     smartphone: 'M680-920H280c-44 0-80 36-80 80v720c0 44 36 80 80 80h400c44 0 80-36 80-80v-720c0-44-36-80-80-80Zm0 720H280v-600h400v600Zm-120 80h-160v-40h160v40Z',
+    edit: 'M200-200h57l391-391-57-57-391 391v57Zm-80 80v-170l528-527q12-11 26.5-17t30.5-6q16 0 31 6t26 18l55 56q12 11 17.5 26t5.5 30q0 16-5.5 30.5T817-647L290-120H120Zm640-584-56-56 56 56Zm-141 85-28-29 57 57-29-28Z',
+    check: 'M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z'
 };
 
 const FILLED_ICON_PATHS = {
@@ -523,9 +525,9 @@ async function unloadModule(modId) {
 }
 
 // Apps & Exclusions
-let allAppsCache = [], showSystemApps = false,
-    appLoadingPromise = null, currentlyDisplayedApps = [],
-    appListRenderIndex = 0, listObserver = null, filterTimeout, exclusionsLoadId = 0;
+let allAppsCache = [], showSystemApps = false, appLoadingPromise = null, appListRenderIndex = 0,
+    currentlyDisplayedApps = [], listObserver = null, filterTimeout, exclusionsLoadId = 0,
+    isMultiSelectMode = false, selectedAppsMap = new Map();
 
 async function readExclusionsJson() {
     try {
@@ -722,13 +724,16 @@ function renderNextAppBatch() {
         return;
     }
 
-    const htmlStr = batch.map(app => `
-        <div class="app-item segment-card" data-uid="${app.uid}" data-label="${app.appLabel}" data-pkg="${app.packageName}">
+    const htmlStr = batch.map(app => {
+        const isSel = selectedAppsMap.has(app.uid) ? 'selected' : '';
+        return `
+        <div class="app-item segment-card ${isSel}" data-uid="${app.uid}" data-label="${app.appLabel}" data-pkg="${app.packageName}">
             <img src="ksu://icon/${app.packageName}" class="app-icon-img" loading="lazy" onerror="this.src='${APP_ICON_FALLBACK}'" />
             <div class="app-details"><div class="app-name">${app.appLabel}</div><div class="app-pkg">${app.packageName}</div></div>
             <div class="app-meta"><div class="uid-label">UID: ${app.uid}</div>${app.isSystem ? '<span class="system-chip">SYS</span>' : ''}</div>
         </div>
-    `).join('');
+        `;
+    }).join('');
 
     container.insertAdjacentHTML('beforeend', htmlStr);
     appListRenderIndex += batch.length;
@@ -886,7 +891,7 @@ function initDelegationAndAttach() {
     const updateModuleCardDOM = async (card, modId) => {
         const { stdout } = await exec(`${NM_BIN} rule list --json 2>/dev/null`);
         const activeRules = JSON.parse(stdout.trim() || "[]");
-        let newFileCount = 0;
+        let newFileCount = 0;º
         activeRules.forEach(r => { if (r?.real?.startsWith(`${MOD_DIR}/${modId}/`)) newFileCount++; });
         const nowLoaded = newFileCount > 0;
         const toggleChecked = card.querySelector('.switch-input').checked;
@@ -978,26 +983,139 @@ function initDelegationAndAttach() {
         }
     });
 
-    document.getElementById('app-list-container')?.addEventListener('click', (e) => {
+    let pressTimer, touchMoved = false;
+    const exitMultiSelectMode = () => {
+        isMultiSelectMode = false;
+        selectedAppsMap.clear();
+        document.querySelectorAll('.app-item.selected').forEach(el => el.classList.remove('selected'));
+        const fab = document.getElementById('modal-fab-action');
+        if (fab) {
+            fab.classList.remove('mode-check');
+            const icon = fab.querySelector('md-icon');
+            if (icon) {
+                icon.innerHTML = ''; 
+                icon.dataset.iconVariant = 'force_redraw'; 
+                setIcon(icon, 'edit', 'outline');
+            }
+        }
+    };
+
+    const toggleAppSelection = (item) => {
+        const uid = item.dataset.uid;
+        if (selectedAppsMap.has(uid)) {
+            selectedAppsMap.delete(uid);
+            item.classList.remove('selected');
+            if (selectedAppsMap.size === 0) exitMultiSelectMode();
+        } else {
+            selectedAppsMap.set(uid, { uid, label: item.dataset.label, pkg: item.dataset.pkg });
+            item.classList.add('selected');
+        }
+    };
+
+    const container = document.getElementById('app-list-container');
+    container?.addEventListener('touchstart', (e) => {
+        touchMoved = false;
         const item = e.target.closest('.app-item');
-        if (item && !item.dataset.busy) {
+        if (!item || item.dataset.busy) return;
+        pressTimer = setTimeout(() => {
+            if (!isMultiSelectMode) {
+                if (navigator.vibrate) navigator.vibrate(50);
+                isMultiSelectMode = true;
+                const fab = document.getElementById('modal-fab-action');
+                if (fab) {
+                    fab.classList.add('mode-check');
+                    const icon = fab.querySelector('md-icon');
+                    if (icon) {
+                        icon.innerHTML = ''; 
+                        icon.dataset.iconVariant = 'force_redraw';
+                        setIcon(icon, 'check', 'outline');
+                    }
+                }
+                toggleAppSelection(item);
+            }
+        }, 500);
+    }, { passive: true });
+
+    container?.addEventListener('touchmove', () => { touchMoved = true; clearTimeout(pressTimer); }, { passive: true });
+    container?.addEventListener('touchend', () => clearTimeout(pressTimer));
+    container?.addEventListener('click', (e) => {
+        const item = e.target.closest('.app-item');
+        if (!item || item.dataset.busy || touchMoved) return;
+
+        if (isMultiSelectMode) {
+            toggleAppSelection(item);
+        } else {
             item.dataset.busy = 'true';
-            const uid = item.dataset.uid;
-            const label = item.dataset.label;
-            const pkg = item.dataset.pkg;
+            const { uid, label, pkg } = item.dataset;
             if (listObserver) listObserver.disconnect();
             document.getElementById('app-selector-modal')?.classList.remove('active');
-            setTimeout(async () => {
-                await addExclusion(uid, label, pkg);
-            }, 50);
+            setTimeout(async () => { await addExclusion(uid, label, pkg); }, 50);
+        }
+    });
+
+    document.getElementById('modal-fab-action')?.addEventListener('click', async () => {
+        if (isMultiSelectMode) {
+            const appsToSave = new Map(selectedAppsMap);
+            exitMultiSelectMode();
+            document.getElementById('app-selector-modal').classList.remove('active');
+            if (listObserver) listObserver.disconnect();
+            if (appsToSave.size > 0) {
+                try {
+                    const currentData = await readExclusionsJson();
+                    const existingUids = new Set(currentData.map(a => String(a.uid)));
+                    let uidsBash = [];
+                    appsToSave.forEach((app, uid) => {
+                        if (!existingUids.has(uid)) currentData.push(app);
+                        uidsBash.push(uid);
+                    });
+
+                    await writeExclusionsJson(currentData);
+                    await exec(`for u in ${uidsBash.join(' ')}; do ${NM_BIN} uid add $u; done`);
+                    showToast(`${appsToSave.size} apps added`);
+                } catch { showToast(translate('error_blocking') || 'Error'); }
+                await loadExclusions();
+            }
+        } else {
+            const getManualUid = () => new Promise(resolve => {
+                const modalDialog = document.getElementById('uid-input-modal');
+                const input = document.getElementById('manual-uid-input');
+                const btnCancel = document.getElementById('btn-cancel-uid');
+                const btnAdd = document.getElementById('btn-confirm-uid');
+                modalDialog.classList.add('active');
+                input.value = '';
+                setTimeout(() => input.focus(), 150);
+                const cleanup = () => {
+                    modalDialog.classList.remove('active');
+                    input.blur();
+                    btnCancel.onclick = null;
+                    btnAdd.onclick = null;
+                    modalDialog.onclick = null;
+                };
+                btnCancel.onclick = () => { cleanup(); resolve(null); };
+                btnAdd.onclick = () => { cleanup(); resolve(input.value); };
+                modalDialog.onclick = (e) => {  if (e.target === modalDialog) { cleanup(); resolve(null); }  };
+            });
+
+            const manualUid = await getManualUid();
+            if (manualUid && /^\d+$/.test(manualUid.trim())) {
+                document.getElementById('app-selector-modal').classList.remove('active');
+                if (listObserver) listObserver.disconnect();
+                await addExclusion(manualUid.trim(), `UID: ${manualUid.trim()}`, 'System/Manual');
+            } else if (manualUid) {
+                showToast(translate('invalid_uid') || 'Invalid UID format');
+            }
         }
     });
 
     document.getElementById('app-selector-modal')?.addEventListener('click', (e) => {
         if (e.target === e.currentTarget) {
             e.currentTarget.classList.remove('active');
+            exitMultiSelectMode();
             if (listObserver) listObserver.disconnect(); 
         }
+    });
+    document.getElementById('btn-close-modal')?.addEventListener('click', () => {
+        exitMultiSelectMode();
     });
 
     document.getElementById('fab-add-exclusion')?.addEventListener('click', openAppSelector);
