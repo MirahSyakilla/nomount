@@ -32,36 +32,28 @@ else
 fi
 
 USE_KSUD=false
-if command -v ksud >/dev/null 2>&1 && \
-   ksud -h 2>&1 | grep -qE '(^|[[:space:]])insmod([[:space:]]|$)'; then
+if command -v ksud >/dev/null 2>&1 && ksud -h 2>&1 | grep -qE '(^|[[:space:]])insmod([[:space:]]|$)'; then
   USE_KSUD=true
   ui_print "- KernelSU ksud insmod detected; KoLoader will remain as fallback."
 fi
 
-if [ ! -f "$MODPATH/bin/ko-loader-$ARCH" ]; then
-  abort "! KoLoader binary not found for architecture: $ARCH"
-fi
 mv "$MODPATH/bin/ko-loader-$ARCH" "$MODPATH/loader"
 set_perm "$MODPATH/loader" 0 0 0755
 rm -rf "$MODPATH"/bin/nm-* "$MODPATH"/bin/ko-loader-*
 
-KO_LOADER="$MODPATH/loader"
-
 load_ko() {
   if [ "$USE_KSUD" = true ]; then
-    if ksud insmod "$1" && "$MODPATH/bin/nm" version > /dev/null 2>&1; then
-      return 0
-    fi
+    if ksud insmod "$1" && "$MODPATH/bin/nm" version >/dev/null 2>&1; then return 0; fi
     ui_print "  [!] ksud insmod failed; falling back to KoLoader."
     rmmod nomount 2>/dev/null
     USE_KSUD=false
   fi
 
-  ko_name=${1##*/}
-  (
-    cd "$MODPATH/lkm" || exit 1
-    "$KO_LOADER" "$ko_name"
-  )
+  if ! { "$MODPATH/loader" "$1" >/dev/null 2>&1 && "$MODPATH/bin/nm" version >/dev/null 2>&1; }; then
+    return 1
+  fi
+
+  return 0
 }
 
 OLD_MODPATH="/data/adb/modules/nomount"
