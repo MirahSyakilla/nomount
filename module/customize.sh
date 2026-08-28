@@ -73,7 +73,7 @@ IS_BUILTIN=false
 
 ui_print "- Checking Kernel support via Internal API..."
 if "$MODPATH/bin/nm" version > /dev/null 2>&1 || "$OLD_MODPATH/bin/nm" version > /dev/null 2>&1; then
-  if lsmod | grep -q "^nomount"; then
+  if lsmod | grep -q "^nomount\b"; then
     ui_print "  [*] Active LKM detected during update. Unloading old driver..."
     rmmod nomount 2>/dev/null
     OLD_LKM_UNLOADED=true
@@ -92,7 +92,7 @@ else
   EXACT_MATCH="$MODPATH/lkm/nomount-${AKVER}-${KVER}.ko"
   if [ -n "$AKVER" ] && [ -f "$EXACT_MATCH" ]; then
     ui_print "  [*] Trying exact match: $(basename "$EXACT_MATCH")"
-    if load_ko "$EXACT_MATCH" && "$MODPATH/bin/nm" version > /dev/null 2>&1; then
+    if load_ko "$EXACT_MATCH"; then
       mv "$EXACT_MATCH" "$MODPATH/lkm/nomount.ko"
       NOMOUNT_LOADED=true
     else
@@ -104,7 +104,7 @@ else
     for mod in "$MODPATH"/lkm/nomount*-${KVER}.ko; do
       if [ ! -f "$mod" ] || [ "$mod" = "$EXACT_MATCH" ]; then continue; fi
       ui_print "  [*] Trying fallback: $(basename "$mod")"
-      if load_ko "$mod" && "$MODPATH/bin/nm" version > /dev/null 2>&1; then
+      if load_ko "$mod"; then
         mv "$mod" "$MODPATH/lkm/nomount.ko"
         NOMOUNT_LOADED=true
         break
@@ -118,9 +118,8 @@ else
     ui_print "  [!] New modules failed. Restoring previous working LKM..."
     mkdir -p "$MODPATH/lkm"
     cp "$OLD_MODPATH/lkm/nomount.ko" "$MODPATH/lkm/nomount.ko"
-    cp "$OLD_MODPATH/bin/nm" "$MODPATH/bin/nm"
-    chmod +x "$MODPATH/bin/nm"
-    if load_ko "$MODPATH/lkm/nomount.ko" && "$MODPATH/bin/nm" version > /dev/null 2>&1; then
+    cp "$OLD_MODPATH/bin/nm" "$MODPATH/bin/nm" && set_perm "$MODPATH/bin/nm" 0 0 0755
+    if load_ko "$MODPATH/lkm/nomount.ko"; then
       NOMOUNT_LOADED=true
       RESTORED_OLD_KO=true
     else
@@ -136,7 +135,7 @@ if [ "$NOMOUNT_LOADED" = true ]; then
     rm -f "$MODPATH/loader"
   fi
   ui_print "  [OK] System is ready for injection."
-  if { [ "$OLD_LKM_UNLOADED" = true ] && [ "$IS_BUILTIN" = false ]; } || [ "$RESTORED_OLD_KO" = true ]; then
+  if [ "$OLD_LKM_UNLOADED" = true ] || [ "$RESTORED_OLD_KO" = true ]; then
     if [ -f "$MODPATH/metamount.sh" ]; then
       ui_print "  [*] Executing metamount.sh to refresh bindings..."
       sh "$MODPATH/metamount.sh"
