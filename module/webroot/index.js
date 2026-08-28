@@ -134,7 +134,7 @@ function renderLanguagePicker() {
 const MOD_DIR = "/data/adb/modules";
 const NM_DATA = "/data/adb/nomount";
 const NM_BIN = "/data/adb/modules/nomount/bin/nm";
-const FILES = { verbose: `${NM_DATA}/.verbose`, disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list.json` };
+const FILES = { disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list.json` };
 const APP_ICON_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzgwODA4MCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIvPjwvc3ZnPg==";
 const viewLoadState = { 'view-home': false, 'view-modules': false, 'view-exclusions': false, 'view-options': false };
 
@@ -792,14 +792,8 @@ async function addExclusion(uid, label, pkg) {
 
 // Options
 async function loadOptions() {
-    const swVerbose = document.querySelector('#setting-verbose input'),
-          swSafe = document.querySelector('#setting-safemode input'),
+    const swSafe = document.querySelector('#setting-safemode input'),
           btnClear = document.getElementById('btn-clear-rules');
-
-    if (swVerbose) { 
-        swVerbose.checked = (await exec(`[ -f ${FILES.verbose} ] && echo yes`)).stdout.includes('yes');
-        swVerbose.onchange = e => exec(e.target.checked ? `touch ${FILES.verbose}` : `rm ${FILES.verbose}`);
-    }
 
     if (swSafe) {
         swSafe.checked = (await exec(`[ -f ${FILES.disable} ] && echo yes`)).stdout.includes('yes');
