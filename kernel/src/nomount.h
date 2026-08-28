@@ -115,7 +115,7 @@ struct nomount_rule {
     unsigned int target_uid;
     u16 v_len;
     u8  flags;
-
+    struct rcu_head rcu;
     struct hlist_node vpath_node;
     struct nomount_dir_node *parent_dir;
     struct nomount_dir_node *this_dir;
