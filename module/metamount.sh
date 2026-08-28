@@ -9,7 +9,9 @@ NOMOUNT_DATA="/data/adb/nomount"
 LOG_FILE="$NOMOUNT_DATA/nomount.log"
 VERBOSE_FLAG="$NOMOUNT_DATA/.verbose"
 BOOT_SEMAPHORE="$NOMOUNT_DATA/.booting"
-TARGET_PARTITIONS="system vendor product system_ext odm oem"
+TARGET_PARTITIONS="system system_ext vendor odm product apex oem optics prism
+                    mi_ext my_bigball my_carrier my_company my_engineering my_heytap
+                    my_manifest my_preload my_product my_region my_reserve my_stock"
 PROP_FILE="$MODDIR/module.prop"
 BASE_DESC="A metamodule that replaces OverlayFS/MagicMount with VFS path redirection."
 
@@ -94,6 +96,7 @@ for mod_path in "$MODULES_DIR"/*; do
 
     for partition in $TARGET_PARTITIONS; do
         if [ -d "$mod_path/$partition" ]; then
+            [ -d "/$partition" ] || [ -d "/system/$partition" ] || continue
             echo "[INFO] Mounting module: $mod_name (/$partition)" >> "$LOG_FILE"
             (
                 cd "$mod_path" || exit

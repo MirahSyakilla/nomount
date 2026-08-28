@@ -403,6 +403,10 @@ function applyHomeData(data, statsText) {
 
 // Modules
 let currentRenderId = 0;
+const TARGET_PARTITIONS = `system system_ext vendor odm product apex oem optics prism
+                           mi_ext my_bigball my_carrier my_company my_engineering my_heytap
+                           my_manifest my_preload my_product my_region my_reserve my_stock`
+
 async function loadModules() {
     const listContainer = document.getElementById('modules-list');
     if (!listContainer) return;
@@ -415,9 +419,7 @@ async function loadModules() {
             for mod in *; do
                 [ ! -d "$mod" ] || [ "$mod" = "nomount" ] || [ ! -f "$mod/module.prop" ] && continue
                 has_injectable=0
-                for p in system vendor product system_ext oem odm my_* tran_*; do
-                    if [ -d "$mod/$p" ]; then has_injectable=1; break; fi
-                done
+                for p in ${TARGET_PARTITIONS}; do [ -d "$mod/$p" ] && { [ -d "/$p" ] || [ -d "/system/$p" ]; } && has_injectable=1 && break; done
                 [ $has_injectable -eq 0 ] && continue
                 echo "$mod|$(grep "^name=" "$mod/module.prop" | head -n1 | cut -d= -f2-)|$([ -f "$mod/disable" ] && echo true || echo false)|$([ -f "$mod/skip_mount" ] && echo true || echo false)"
             done
@@ -480,7 +482,10 @@ async function loadModule(modId) {
     const modPath = `${MOD_DIR}/${modId}`;
     const script = `
         cd "${modPath}" || exit 0
-        find -L system vendor product system_ext odm oem \\( -type d -o -type c -o -name ".replace" \\) -exec sh -c '
+        valid_dirs=""
+        for p in ${TARGET_PARTITIONS}; do [ -d "$p" ] && { [ -d "/$p" ] || [ -d "/system/$p" ]; } && valid_dirs="$valid_dirs $p"; done
+        [ -z "$valid_dirs" ] && exit 0
+        find -L $valid_dirs \\( -type d -o -type c -o -name ".replace" \\) -exec sh -c '
             for f do
                 v="$f"; [ "\${v#system/odm/}" != "$v" ] && v="odm/\${v#system/odm/}"
                 if [ -d "$f" ]; then
@@ -493,7 +498,7 @@ async function loadModule(modId) {
             done
         ' _ {} + 2>/dev/null | xargs -0 -r ${NM_BIN} rule add --whiteout
 
-        find -L system vendor product system_ext odm oem \\( -type f -o -type l \\) ! -name ".replace" -exec sh -c '
+        find -L $valid_dirs  \\( -type f -o -type l \\) ! -name ".replace" -exec sh -c '
             mod="$1"; shift
             for f do
                 v="$f"; [ "\${v#system/odm/}" != "$v" ] && v="odm/\${v#system/odm/}"
@@ -508,7 +513,10 @@ async function unloadModule(modId) {
     const modPath = `${MOD_DIR}/${modId}`;
     const script = `
         cd "${modPath}" || exit 0
-        find -L system vendor product system_ext odm oem \\( -type f -o -type l -o -type c -o -type d \\) -exec sh -c '
+        valid_dirs=""
+        for p in ${TARGET_PARTITIONS}; do [ -d "$p" ] && { [ -d "/$p" ] || [ -d "/system/$p" ]; } && valid_dirs="$valid_dirs $p"; done
+        [ -z "$valid_dirs" ] && exit 0
+        find -L $valid_dirs \\( -type f -o -type l -o -type c -o -type d \\) -exec sh -c '
             for f do
                 v="$f"; [ "\${v#system/odm/}" != "$v" ] && v="odm/\${v#system/odm/}"
                 if [ -d "$f" ]; then
