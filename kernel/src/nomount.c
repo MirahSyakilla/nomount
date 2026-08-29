@@ -351,7 +351,7 @@ static int nomount_hijacked_iterate_dir(struct file *file, struct dir_context *c
     struct nm_fop *nm_fop = __get_nm(smp_load_acquire(&file->f_op), struct nm_fop, fake_fop, iterate_shared, nomount_hijacked_iterate_dir);
     struct nomount_dir_node *dir_node = nm_fop ? READ_ONCE(nm_fop->dir_node) : NULL;
     const struct file_operations *orig_fop = nm_fop ? nm_fop->orig_fop : NULL;
-    struct nomount_proxy_ctx proxy_ctx;
+    struct nomount_proxy_ctx proxy_ctx = { .ctx.actor = nomount_actor_proxy };
     int res = 0;
 
     if (unlikely(!orig_fop || !dir_node))
@@ -366,7 +366,6 @@ static int nomount_hijacked_iterate_dir(struct file *file, struct dir_context *c
     if (unlikely(nomount_is_uid_blocked(current_uid().val) || !READ_ONCE(dir_node->bloom_mask)))
         goto do_real_iterate;
 
-    proxy_ctx.ctx.actor = nomount_actor_proxy;
     proxy_ctx.ctx.pos = ctx->pos;
     proxy_ctx.orig_ctx = ctx;
     proxy_ctx.dir_node = dir_node;
