@@ -23,6 +23,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ github.ref_name }}
+          fetch-depth: 0
 
       - name: Setup zig
         uses: jetsung/setup-zig@v0.0.4
@@ -79,17 +80,20 @@ jobs:
           path: module/lkm
           merge-multiple: true
 
-      - name: Update version code
-        run: sed -i 's/^versionCode=.*/versionCode=${{ github.run_number }}/' module/module.prop
-
-      - name: Extract module metadata
+      - name: Process versioning and metadata
         run: |
-          NAME=$(sed -n 's/^name=//p' module/module.prop | tr -d '\r' | tr -d ' ')
-          VERSION=$(sed -n 's/^version=//p' module/module.prop | tr -d '\r' | tr -d ' ')
           SHORT_HASH=$(git rev-parse --short HEAD)
-          echo "MODULE_NAME=$NAME" >> $GITHUB_ENV
-          echo "MODULE_VERSION=$VERSION" >> $GITHUB_ENV
-          echo "COMMIT_HASH=$SHORT_HASH" >> $GITHUB_ENV
+          COMMIT_COUNT=$(git rev-list --count HEAD)
+          NAME=$(sed -n 's/^name=//p' module/module.prop | tr -d '\r' | tr -d ' ')
+          BASE_VERSION=$(sed -n 's/^version=//p' module/module.prop | tr -d '\r' | tr -d ' ')
+
+          sed -i "s/^versionCode=.*/versionCode=${COMMIT_COUNT}/" module/module.prop
+          if [ "${{ github.ref }}" != "refs/heads/master" ]; then
+            sed -i "s/^version=\(.*\)/version=\1-dev-${SHORT_HASH}/" module/module.prop
+            echo "ARTIFACT_NAME=${NAME}-${BASE_VERSION}-dev-${SHORT_HASH}-${COMMIT_COUNT}" >> $GITHUB_ENV
+          else
+            echo "ARTIFACT_NAME=${NAME}-${BASE_VERSION}-release-${SHORT_HASH}-${COMMIT_COUNT}" >> $GITHUB_ENV
+          fi
 
       - name: Optimize release module (via standalone esbuild)
         run: |
@@ -116,5 +120,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}-${{ github.run_number }}-${{ env.COMMIT_HASH }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: ${{ runner.temp }}/nomount-module-${{ github.run_id }}-${{ github.run_attempt }}/
