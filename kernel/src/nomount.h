@@ -78,8 +78,7 @@ struct nomount_child_array {
     struct rcu_head rcu;
     int count;
     int capacity;
-    u32 *hashes;
-    struct nomount_rule **rules;
+    u32 hashes[];
 };
 
 struct nomount_dir_node {
@@ -111,6 +110,11 @@ struct nomount_rule {
 };
 
 #define nm_get_child_name(rule) (nm_get_vpath(rule) + (rule)->v_len - (rule)->child_len)
+
+static __always_inline struct nomount_rule **nm_get_child_rules(struct nomount_child_array *array)
+{
+    return (struct nomount_rule **)(array->hashes + array->capacity);
+}
 
 struct nm_rule_info {
     u32 flags;

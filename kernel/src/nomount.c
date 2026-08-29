@@ -47,6 +47,7 @@ static __always_inline struct nomount_rule *nomount_bsearch_child(struct nomount
 {
     int l = 0, n = arr->count;
     u32 *hashes = arr->hashes;
+    struct nomount_rule **rules = nm_get_child_rules(arr);
 
     if (unlikely(n <= 0)) return NULL;
     while (n > 0) {
@@ -55,7 +56,7 @@ static __always_inline struct nomount_rule *nomount_bsearch_child(struct nomount
         n = less ? n - step - 1 : step;
     }
     while (l < arr->count && hashes[l] == hash) {
-        struct nomount_rule *rule = READ_ONCE(arr->rules[l]);
+        struct nomount_rule *rule = READ_ONCE(rules[l]);
         if (rule && rule->child_len == len && !memcmp(nm_get_child_name(rule), name, len)) {
             if (index) *index = l;
             return rule;
@@ -219,10 +220,11 @@ static inline void nomount_emit_virtual_children(struct dir_context *ctx, struct
 	srcu_idx = srcu_read_lock(&nomount_srcu);
 	array = srcu_dereference(dir_node->children, &nomount_srcu);
 	if (array) {
+		struct nomount_rule **rules = nm_get_child_rules(array);
 		for (id = nm_unpack_pos(ctx->pos); id < array->count; id++) {
 			struct nomount_rule *rule;
 			ctx->pos = nm_pack_pos(id);
-			if ((rule = READ_ONCE(array->rules[id])) && (rule->target_uid == 0 || rule->target_uid == current_uid().val)) {
+			if ((rule = READ_ONCE(rules[id])) && (rule->target_uid == 0 || rule->target_uid == current_uid().val)) {
 				if (!(rule->flags & NM_FLAG_WHITEOUT) && !dir_emit(ctx, nm_get_child_name(rule), rule->child_len, rule->v_hash,
 						(rule->flags & NM_FLAG_IS_DIR) ? DT_DIR : DT_REG)) break;
 			}
@@ -966,6 +968,7 @@ static __always_inline struct nomount_dir_node *__nomount_alloc_dir_node(struct 
 static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, struct nomount_rule *rule, const char *name, size_t name_len)
 {
     struct nomount_child_array *new_arr, *old_arr;
+    struct nomount_rule **new_rules, **old_rules;
     int old_count, capacity, new_cap, pos = 0;
     u32 target_hash;
 
@@ -976,12 +979,13 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
     rule->parent_dir = dir_node;
     if ((old_arr = dir_node->children) && nomount_bsearch_child(old_arr, name, name_len, target_hash, &pos)) {
         write_seqcount_begin(&dir_node->seq);
-        WRITE_ONCE(old_arr->rules[pos], rule);
+        WRITE_ONCE(nm_get_child_rules(old_arr)[pos], rule);
         write_seqcount_end(&dir_node->seq);
         return;
     }
     old_count = old_arr ? old_arr->count : 0;
     capacity = old_arr ? old_arr->capacity : 0;
+    old_rules = old_arr ? nm_get_child_rules(old_arr) : NULL;
 
     if (old_arr)
         while (pos < old_count && old_arr->hashes[pos] < target_hash) pos++;
@@ -991,11 +995,11 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
         if (pos < old_count) {
             for (int i = old_count; i > pos; i--) {
                 WRITE_ONCE(old_arr->hashes[i], READ_ONCE(old_arr->hashes[i - 1]));
-                WRITE_ONCE(old_arr->rules[i], READ_ONCE(old_arr->rules[i - 1]));
+                WRITE_ONCE(old_rules[i], READ_ONCE(old_rules[i - 1]));
             }
         }
         WRITE_ONCE(old_arr->hashes[pos], target_hash);
-        WRITE_ONCE(old_arr->rules[pos], rule);
+        WRITE_ONCE(old_rules[pos], rule);
         old_arr->count++;
         dir_node->bloom_mask |= (1ULL << (target_hash & 63));
         write_seqcount_end(&dir_node->seq);
@@ -1003,20 +1007,19 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
     }
 
     new_cap = capacity == 0 ? 4 : capacity * 2;
-    new_arr = kmalloc(sizeof(*new_arr) + (new_cap * sizeof(u32)) + (new_cap * sizeof(void *)), GFP_KERNEL);
+    new_arr = kmalloc(sizeof(*new_arr) + (new_cap * sizeof(u32)) + (new_cap * sizeof(*new_rules)), GFP_KERNEL);
     if (!new_arr) return;
-    new_arr->hashes = (u32 *)(new_arr + 1);
-    new_arr->rules = (struct nomount_rule **)(new_arr->hashes + new_cap);
     new_arr->capacity = new_cap;
     new_arr->count = old_count + 1;
+    new_rules = nm_get_child_rules(new_arr);
     if (old_arr) {
         memcpy(new_arr->hashes, old_arr->hashes, pos * sizeof(u32));
-        memcpy(new_arr->rules, old_arr->rules, pos * sizeof(void *));
+        memcpy(new_rules, old_rules, pos * sizeof(*new_rules));
         memcpy(&new_arr->hashes[pos + 1], &old_arr->hashes[pos], (old_count - pos) * sizeof(u32));
-        memcpy(&new_arr->rules[pos + 1], &old_arr->rules[pos], (old_count - pos) * sizeof(void *));
+        memcpy(&new_rules[pos + 1], &old_rules[pos], (old_count - pos) * sizeof(*new_rules));
     }
     new_arr->hashes[pos] = target_hash;
-    new_arr->rules[pos] = rule;
+    new_rules[pos] = rule;
 
     write_seqcount_begin(&dir_node->seq);
     rcu_assign_pointer(dir_node->children, new_arr);
@@ -1031,13 +1034,15 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
 {
     struct nomount_dir_node *dir_node = rule->parent_dir;
     struct nomount_child_array *old_arr;
+    struct nomount_rule **rules;
     int old_count, target_idx = -1;
     u64 mask = 0;
 
     if (unlikely(!dir_node || !(old_arr = dir_node->children))) return;
+    rules = nm_get_child_rules(old_arr);
 
     for (int i = 0; i < (old_count = old_arr->count); i++) {
-        if (READ_ONCE(old_arr->rules[i]) == rule) {
+        if (READ_ONCE(rules[i]) == rule) {
             target_idx = i;
             break;
         }
@@ -1060,7 +1065,7 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
     if (target_idx < old_count - 1) {
         for (int i = target_idx; i < old_count - 1; i++) {
             WRITE_ONCE(old_arr->hashes[i], READ_ONCE(old_arr->hashes[i + 1]));
-            WRITE_ONCE(old_arr->rules[i], READ_ONCE(old_arr->rules[i + 1]));
+            WRITE_ONCE(rules[i], READ_ONCE(rules[i + 1]));
         }
     }
     old_arr->count--;
