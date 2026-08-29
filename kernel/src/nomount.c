@@ -43,7 +43,7 @@ static __always_inline struct nomount_dir_node *nomount_get_dir_node(struct inod
     return NULL;
 }
 
-static __always_inline struct nomount_child_node *nomount_bsearch_child(struct nomount_child_array *arr, const char *name, size_t len, u32 hash)
+static __always_inline struct nomount_rule *nomount_bsearch_child(struct nomount_child_array *arr, const char *name, size_t len, u32 hash, int *index)
 {
     int l = 0, n = arr->count;
     u32 *hashes = arr->hashes;
@@ -55,9 +55,11 @@ static __always_inline struct nomount_child_node *nomount_bsearch_child(struct n
         n = less ? n - step - 1 : step;
     }
     while (l < arr->count && hashes[l] == hash) {
-        struct nomount_child_node *c = arr->nodes[l];
-        if (c->name_len == len && !memcmp(c->name, name, len)) 
-            return c;
+        struct nomount_rule *rule = READ_ONCE(arr->rules[l]);
+        if (rule && rule->child_len == len && !memcmp(nm_get_child_name(rule), name, len)) {
+            if (index) *index = l;
+            return rule;
+        }
         l++;
     }
     return NULL;
@@ -66,7 +68,7 @@ static __always_inline struct nomount_child_node *nomount_bsearch_child(struct n
 static __always_inline bool __nomount_get_rule_info(struct nomount_dir_node *dir_node, const char *name, size_t len, u32 hash, struct nm_rule_info *rule_info, bool get_path)
 {
     struct nomount_child_array *arr;
-    struct nomount_child_node *c;
+    struct nomount_rule *rule;
     unsigned int seq;
     bool found = false;
 
@@ -74,13 +76,13 @@ static __always_inline bool __nomount_get_rule_info(struct nomount_dir_node *dir
         seq = read_seqcount_begin(&dir_node->seq);
         arr = rcu_dereference(dir_node->children);
         if (likely(arr)) {
-            c = nomount_bsearch_child(arr, name, len, hash);
-            if (c && c->rule && (c->rule->target_uid == 0 || c->rule->target_uid == current_uid().val)) {
+            rule = nomount_bsearch_child(arr, name, len, hash, NULL);
+            if (rule && (rule->target_uid == 0 || rule->target_uid == current_uid().val)) {
                 if (rule_info) {
-                    rule_info->flags = c->rule->flags;
-                    rule_info->v_ino = c->rule->v_ino;
-                    rule_info->this_dir = c->rule->this_dir;
-                    (get_path && c->rule->r_path.dentry) ? (void)(rule_info->r_path = c->rule->r_path) : (void)(rule_info->r_path.dentry = NULL);
+                    rule_info->flags = rule->flags;
+                    rule_info->v_ino = rule->v_ino;
+                    rule_info->this_dir = rule->this_dir;
+                    (get_path && rule->r_path.dentry) ? (void)(rule_info->r_path = rule->r_path) : (void)(rule_info->r_path.dentry = NULL);
                 }
                 found = true;
             } else {
@@ -118,10 +120,7 @@ static void nm_dir_rcu_free(struct rcu_head *head)
 {
     struct nomount_dir_node *dir = container_of(head, struct nomount_dir_node, rcu);
     struct nomount_child_array *arr = dir->children;
-    if (arr) {
-        int i; for (i = 0; i < arr->count; i++) kfree(arr->nodes[i]);
-        kfree(arr);
-    }
+    kfree(arr);
     kmem_cache_free(nm_dir_cachep, dir);
 }
 
@@ -187,11 +186,11 @@ static NM_ACTOR_RET nomount_actor_proxy(struct dir_context *ctx, const char *nam
             rcu_read_lock();
             do {
                 struct nomount_child_array *arr;
-                struct nomount_child_node *c;
+                struct nomount_rule *rule;
                 seq = read_seqcount_begin(&proxy->dir_node->seq);
                 arr = rcu_dereference(proxy->dir_node->children);
-                is_injected = likely(arr) && (c = nomount_bsearch_child(arr, name, namelen, hash)) &&
-                                              c->rule && (!c->rule->target_uid || c->rule->target_uid == fsuid);
+                is_injected = likely(arr) && (rule = nomount_bsearch_child(arr, name, namelen, hash, NULL)) &&
+                                              (!rule->target_uid || rule->target_uid == fsuid);
             } while (read_seqcount_retry(&proxy->dir_node->seq, seq));
             rcu_read_unlock();
         }
@@ -221,10 +220,11 @@ static inline void nomount_emit_virtual_children(struct dir_context *ctx, struct
 	array = srcu_dereference(dir_node->children, &nomount_srcu);
 	if (array) {
 		for (id = nm_unpack_pos(ctx->pos); id < array->count; id++) {
-			struct nomount_child_node *child;
+			struct nomount_rule *rule;
 			ctx->pos = nm_pack_pos(id);
-			if ((child = array->nodes[id]) && (child->rule->target_uid == 0 || child->rule->target_uid == current_uid().val)) {
-				if (!(child->flags & NM_FLAG_WHITEOUT) && !dir_emit(ctx, child->name, child->name_len, child->fake_ino, child->d_type)) break;
+			if ((rule = READ_ONCE(array->rules[id])) && (rule->target_uid == 0 || rule->target_uid == current_uid().val)) {
+				if (!(rule->flags & NM_FLAG_WHITEOUT) && !dir_emit(ctx, nm_get_child_name(rule), rule->child_len, rule->v_hash,
+						(rule->flags & NM_FLAG_IS_DIR) ? DT_DIR : DT_REG)) break;
 			}
 			ctx->pos = nm_pack_pos(id + 1);
 		}
@@ -966,29 +966,20 @@ static __always_inline struct nomount_dir_node *__nomount_alloc_dir_node(struct 
 static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, struct nomount_rule *rule, const char *name, size_t name_len)
 {
     struct nomount_child_array *new_arr, *old_arr;
-    struct nomount_child_node *new_child, *existing_child;
     int old_count, capacity, new_cap, pos = 0;
     u32 target_hash;
 
     if (unlikely(!dir_node)) return;
 
     target_hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name, name_len);
-    if ((old_arr = dir_node->children) && (existing_child = nomount_bsearch_child(old_arr, name, name_len, target_hash))) {
-        existing_child->rule = rule;
-        rule->parent_dir = dir_node;
+    rule->child_len = name_len;
+    rule->parent_dir = dir_node;
+    if ((old_arr = dir_node->children) && nomount_bsearch_child(old_arr, name, name_len, target_hash, &pos)) {
+        write_seqcount_begin(&dir_node->seq);
+        WRITE_ONCE(old_arr->rules[pos], rule);
+        write_seqcount_end(&dir_node->seq);
         return;
     }
-
-    if (unlikely(!(new_child = kmalloc(sizeof(*new_child) + name_len + 1, GFP_KERNEL)))) return;
-
-    rule->parent_dir = dir_node;
-    new_child->fake_ino = rule->v_hash;
-    new_child->d_type = (rule->flags & NM_FLAG_IS_DIR) ? DT_DIR : DT_REG;
-    new_child->flags = rule->flags;
-    new_child->name_len = name_len;
-    new_child->rule = rule;
-    memcpy(new_child->name, name, name_len);
-    new_child->name[name_len] = '\0';
     old_count = old_arr ? old_arr->count : 0;
     capacity = old_arr ? old_arr->capacity : 0;
 
@@ -1000,11 +991,11 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
         if (pos < old_count) {
             for (int i = old_count; i > pos; i--) {
                 WRITE_ONCE(old_arr->hashes[i], READ_ONCE(old_arr->hashes[i - 1]));
-                WRITE_ONCE(old_arr->nodes[i], READ_ONCE(old_arr->nodes[i - 1]));
+                WRITE_ONCE(old_arr->rules[i], READ_ONCE(old_arr->rules[i - 1]));
             }
         }
         WRITE_ONCE(old_arr->hashes[pos], target_hash);
-        WRITE_ONCE(old_arr->nodes[pos], new_child);
+        WRITE_ONCE(old_arr->rules[pos], rule);
         old_arr->count++;
         dir_node->bloom_mask |= (1ULL << (target_hash & 63));
         write_seqcount_end(&dir_node->seq);
@@ -1013,19 +1004,19 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
 
     new_cap = capacity == 0 ? 4 : capacity * 2;
     new_arr = kmalloc(sizeof(*new_arr) + (new_cap * sizeof(u32)) + (new_cap * sizeof(void *)), GFP_KERNEL);
-    if (!new_arr) { kfree(new_child); return; }
+    if (!new_arr) return;
     new_arr->hashes = (u32 *)(new_arr + 1);
-    new_arr->nodes = (struct nomount_child_node **)(new_arr->hashes + new_cap);
+    new_arr->rules = (struct nomount_rule **)(new_arr->hashes + new_cap);
     new_arr->capacity = new_cap;
     new_arr->count = old_count + 1;
     if (old_arr) {
         memcpy(new_arr->hashes, old_arr->hashes, pos * sizeof(u32));
-        memcpy(new_arr->nodes, old_arr->nodes, pos * sizeof(void *));
+        memcpy(new_arr->rules, old_arr->rules, pos * sizeof(void *));
         memcpy(&new_arr->hashes[pos + 1], &old_arr->hashes[pos], (old_count - pos) * sizeof(u32));
-        memcpy(&new_arr->nodes[pos + 1], &old_arr->nodes[pos], (old_count - pos) * sizeof(void *));
+        memcpy(&new_arr->rules[pos + 1], &old_arr->rules[pos], (old_count - pos) * sizeof(void *));
     }
     new_arr->hashes[pos] = target_hash;
-    new_arr->nodes[pos] = new_child;
+    new_arr->rules[pos] = rule;
 
     write_seqcount_begin(&dir_node->seq);
     rcu_assign_pointer(dir_node->children, new_arr);
@@ -1039,7 +1030,6 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
 static void __nomount_delete_child_locked(struct nomount_rule *rule)
 {
     struct nomount_dir_node *dir_node = rule->parent_dir;
-    struct nomount_child_node *child_to_free = NULL;
     struct nomount_child_array *old_arr;
     int old_count, target_idx = -1;
     u64 mask = 0;
@@ -1047,9 +1037,8 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
     if (unlikely(!dir_node || !(old_arr = dir_node->children))) return;
 
     for (int i = 0; i < (old_count = old_arr->count); i++) {
-        if (old_arr->nodes[i]->rule == rule) {
+        if (READ_ONCE(old_arr->rules[i]) == rule) {
             target_idx = i;
-            child_to_free = old_arr->nodes[i];
             break;
         }
     }
@@ -1062,7 +1051,6 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
         write_seqcount_end(&dir_node->seq);
         synchronize_srcu(&nomount_srcu);
         kfree_rcu(old_arr, rcu);
-        kfree_rcu(child_to_free, rcu);
         if (!(dir_node->_tag_ptr & 1UL) && !rcu_access_pointer(dir_node->iop) &&
              !rcu_access_pointer(dir_node->fop) && cmpxchg(&dir_node->v_inode, NULL, (struct inode *)-1L) == NULL)
             call_rcu(&dir_node->rcu, nm_dir_rcu_free);
@@ -1072,7 +1060,7 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
     if (target_idx < old_count - 1) {
         for (int i = target_idx; i < old_count - 1; i++) {
             WRITE_ONCE(old_arr->hashes[i], READ_ONCE(old_arr->hashes[i + 1]));
-            WRITE_ONCE(old_arr->nodes[i], READ_ONCE(old_arr->nodes[i + 1]));
+            WRITE_ONCE(old_arr->rules[i], READ_ONCE(old_arr->rules[i + 1]));
         }
     }
     old_arr->count--;
@@ -1081,7 +1069,6 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
     dir_node->bloom_mask = mask;
     write_seqcount_end(&dir_node->seq);
     synchronize_srcu(&nomount_srcu);
-    kfree_rcu(child_to_free, rcu);
 }
 
 static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)

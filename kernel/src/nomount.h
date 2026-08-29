@@ -74,22 +74,12 @@ struct nm_inode_info {
     u8 flags;
 };
 
-struct nomount_child_node {
-    struct rcu_head rcu;
-    u32 fake_ino;
-    u8 d_type;
-    u8 flags;
-    u16 name_len;
-    struct nomount_rule *rule;
-    char name[]; 
-};
-
 struct nomount_child_array {
     struct rcu_head rcu;
     int count;
     int capacity;
     u32 *hashes;
-    struct nomount_child_node **nodes;
+    struct nomount_rule **rules;
 };
 
 struct nomount_dir_node {
@@ -109,6 +99,7 @@ struct nomount_rule {
     unsigned int target_uid;
     u16 v_len;
     u16 r_len;
+    u16 child_len;
     u8  flags;
 
     struct hlist_node vpath_node;
@@ -118,6 +109,8 @@ struct nomount_rule {
     unsigned long v_ino;
     char paths[]; 
 };
+
+#define nm_get_child_name(rule) (nm_get_vpath(rule) + (rule)->v_len - (rule)->child_len)
 
 struct nm_rule_info {
     u32 flags;
