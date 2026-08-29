@@ -181,7 +181,7 @@ static NM_ACTOR_RET nomount_actor_proxy(struct dir_context *ctx, const char *nam
 
     if (proxy->dir_node) {
         u32 hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name, namelen);
-        if (proxy->dir_node->bloom_mask & (1ULL << (hash & 63))) {
+        if (READ_ONCE(proxy->dir_node->bloom_mask) & (1ULL << (hash & 63))) {
             unsigned int seq;
             uid_t fsuid = current_uid().val;
             rcu_read_lock();
