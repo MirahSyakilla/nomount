@@ -148,13 +148,15 @@ static inline void nm_destroy_hijacked_inode(struct inode *inode, bool restore)
     struct nomount_dir_node *dir_node = nm_iop ? nm_iop->dir_node : (nm_fop ? nm_fop->dir_node : NULL);
 
     if (nm_iop) {
+        if (dir_node) RCU_INIT_POINTER(dir_node->iop, NULL);
         if (restore) smp_store_release(&inode->i_op, nm_iop->orig_iop);
         call_rcu(&nm_iop->rcu, nm_iop_rcu_free);
     }
     if (nm_fop) {
+        if (dir_node) RCU_INIT_POINTER(dir_node->fop, NULL);
         if (restore) smp_store_release(&inode->i_fop, nm_fop->orig_fop);
         call_rcu(&nm_fop->rcu, nm_fop_rcu_free);
-    }        
+    }
     if (dir_node && !(dir_node->_tag_ptr & 1UL)) 
         call_rcu(&dir_node->rcu, nm_dir_rcu_free);
 }
@@ -878,7 +880,8 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
             nm_iop->orig_iop = inode->i_op;
             nm_iop->dir_node = dir_node;
 
-            if (nm_iop->orig_iop->lookup) nm_iop->fake_iop.lookup = nomount_hijacked_lookup;
+            nm_iop->fake_iop.lookup = nomount_hijacked_lookup;
+            rcu_assign_pointer(dir_node->iop, nm_iop);
             smp_store_release(&inode->i_op, &nm_iop->fake_iop);
         }
     }
@@ -894,6 +897,7 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
             if (nm_fop->fake_fop.iterate)
                 nm_fop->fake_fop.iterate = nomount_hijacked_iterate_dir;
 #endif
+            rcu_assign_pointer(dir_node->fop, nm_fop);
             smp_store_release(&inode->i_fop, &nm_fop->fake_fop);
         }
     }
@@ -947,11 +951,10 @@ static void nomount_restore_superblocks(void)
 
 /*** Module Management ***/
 
-static struct nomount_dir_node *__nomount_alloc_dir_node(struct inode *inode) 
+static __always_inline struct nomount_dir_node *__nomount_alloc_dir_node(struct inode *inode) 
 {
     struct nomount_dir_node *dir_node = kmem_cache_zalloc(nm_dir_cachep, GFP_KERNEL);
     if (unlikely(!dir_node)) return NULL;
-    dir_node->dir_inode = inode ? igrab(inode) : NULL;
     seqcount_init(&dir_node->seq); 
     return dir_node;
 }
@@ -1165,14 +1168,14 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
 
 static void nm_detach_dir_node(struct nomount_dir_node *dir_node)
 {
-    struct inode *inode;
+    struct nm_iop *iop;
+    struct nm_fop *fop;
     if (!dir_node || (dir_node->_tag_ptr & 1UL)) return;
-    if ((inode = dir_node->dir_inode)) {
-        struct nm_iop *nm_iop = __get_nm(smp_load_acquire(&inode->i_op), struct nm_iop, fake_iop, lookup, nomount_hijacked_lookup);
-        struct nm_fop *nm_fop = __get_nm(smp_load_acquire(&inode->i_fop), struct nm_fop, fake_fop, iterate_shared, nomount_hijacked_iterate_dir);
-        if (nm_iop) WRITE_ONCE(nm_iop->dir_node, NULL);
-        if (nm_fop) WRITE_ONCE(nm_fop->dir_node, NULL);
-    }
+
+    rcu_read_lock();
+    if ((iop = rcu_dereference(dir_node->iop))) WRITE_ONCE(iop->dir_node, NULL);
+    if ((fop = rcu_dereference(dir_node->fop))) WRITE_ONCE(fop->dir_node, NULL);
+    rcu_read_unlock();
 }
 
 static void nomount_prune_empty_virtual_dirs(struct nomount_dir_node *dir_node, struct hlist_head *victims)
