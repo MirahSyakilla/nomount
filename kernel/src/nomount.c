@@ -1152,7 +1152,7 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
         nm_get_rpath(irule)[0] = '\0';
 
         if (unlikely(!(dir_node = __nomount_alloc_dir_node(NULL)))) {
-            kfree_rcu(irule, rcu);
+            kfree(irule);
             err = -ENOMEM;
             break;
         }
@@ -1267,7 +1267,7 @@ static void nm_free_rule(struct nomount_rule *rule)
             WRITE_ONCE(rule->this_dir->_tag_ptr, 1UL);
         }
     }
-    kfree_rcu(rule, rcu);
+    kfree(rule);
 }
 
 static void nm_detach_rule_locked(struct nomount_rule *rule, struct hlist_head *victims, bool prune)
@@ -1305,7 +1305,7 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
     if ((err = nomount_generate_virtual_topology(rule)) != 0) {
         up_write(&nomount_rwsem);
         nm_free_rule(rule); 
-        synchronize_srcu(&nomount_srcu);
+        synchronize_rcu(); synchronize_srcu(&nomount_srcu);
         hlist_for_each_entry_safe(victim_rule, tmp, &victims, vpath_node)
             nm_free_rule(victim_rule);
         return err;
@@ -1315,7 +1315,7 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
     up_write(&nomount_rwsem);
 
     if (!hlist_empty(&victims)) {
-        synchronize_srcu(&nomount_srcu);
+        synchronize_rcu(); synchronize_srcu(&nomount_srcu);
         hlist_for_each_entry_safe(victim_rule, tmp, &victims, vpath_node)
             nm_free_rule(victim_rule);
     }
@@ -1351,7 +1351,7 @@ static void __nomount_clear_all(int clear_flags)
             rule = rb_entry(node, struct nomount_rule, rb_node);
             nm_detach_rule_locked(rule, &r_victims, false);
         }
-        synchronize_srcu(&nomount_srcu);
+        synchronize_rcu(); synchronize_srcu(&nomount_srcu);
         hlist_for_each_entry_safe(rule, tmp, &r_victims, vpath_node) {
             nm_free_rule(rule);
         }
@@ -1413,7 +1413,7 @@ static int nm_process_payload(unsigned long user_addr)
 
             if (!hlist_empty(&r_victims)) {
                 struct nomount_rule *rule; struct hlist_node *tmp;
-                synchronize_srcu(&nomount_srcu);
+                synchronize_rcu(); synchronize_srcu(&nomount_srcu);
                 hlist_for_each_entry_safe(rule, tmp, &r_victims, vpath_node) nm_free_rule(rule);
             } else payload->status = -ENOENT;
             break;
