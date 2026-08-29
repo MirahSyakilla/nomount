@@ -73,7 +73,7 @@ IS_BUILTIN=false
 
 ui_print "- Checking Kernel support via Internal API..."
 if "$MODPATH/bin/nm" version > /dev/null 2>&1 || "$OLD_MODPATH/bin/nm" version > /dev/null 2>&1; then
-  if lsmod | grep -q "^nomount\b"; then
+  if lsmod | grep -q "^nomount"; then
     ui_print "  [*] Active LKM detected during update. Unloading old driver..."
     rmmod nomount 2>/dev/null
     OLD_LKM_UNLOADED=true

@@ -403,10 +403,7 @@ function applyHomeData(data, statsText) {
 
 // Modules
 let currentRenderId = 0;
-const TARGET_PARTITIONS = `system system_ext vendor odm product apex oem optics prism
-                           mi_ext my_bigball my_carrier my_company my_engineering my_heytap
-                           my_manifest my_preload my_product my_region my_reserve my_stock`
-
+const TARGET_PARTITIONS = "system system_ext vendor odm product apex oem optics prism mi_ext my_bigball my_carrier my_company my_engineering my_heytap my_manifest my_preload my_product my_region my_reserve my_stock";
 async function loadModules() {
     const listContainer = document.getElementById('modules-list');
     if (!listContainer) return;
