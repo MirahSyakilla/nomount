@@ -138,23 +138,6 @@ const FILES = { disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusio
 const APP_ICON_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzgwODA4MCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIvPjwvc3ZnPg==";
 const viewLoadState = { 'view-home': false, 'view-modules': false, 'view-exclusions': false, 'view-options': false };
 
-const normalizeUidList = uids => [...new Set(uids.map(value => {
-    const uid = String(value ?? '').trim();
-    if (!/^\d+$/.test(uid)) return null;
-    const numericUid = Number(uid);
-    return Number.isSafeInteger(numericUid) && numericUid <= 0xffffffff ? String(numericUid) : null;
-}).filter(Boolean))];
-const parseUidList = text => normalizeUidList(String(text ?? '').split(/[\s,]+/));
-const serializeUidList = uids => {
-    const safe = normalizeUidList(uids);
-    return safe.join('\n');
-};
-const buildWriteUidListCmd = uids => {
-    const safe = normalizeUidList(uids);
-    const tempFile = `${FILES.exclusions}.tmp`;
-    const write = safe.length ? `printf '%s\\n' ${safe.join(' ')}` : ':';
-    return `mkdir -p ${NM_DATA} && { ${write} > ${tempFile} && mv -f ${tempFile} ${FILES.exclusions}; }`;
-};
 const renderTextState = (el, cls, text) => { el.className = cls; el.textContent = text; };
 const renderEmptyState = (el, face, text) => el.innerHTML = `<div class="empty-list-placeholder empty-state"><div class="empty-face">${face}</div><div class="empty-text">${text}</div></div>`;
 const delay = ms => new Promise(r => setTimeout(r, ms));
