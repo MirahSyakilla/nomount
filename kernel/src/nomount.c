@@ -157,8 +157,12 @@ static inline void nm_destroy_hijacked_inode(struct inode *inode, bool restore)
         if (restore) smp_store_release(&inode->i_fop, nm_fop->orig_fop);
         call_rcu(&nm_fop->rcu, nm_fop_rcu_free);
     }
-    if (dir_node && !(dir_node->_tag_ptr & 1UL)) 
-        call_rcu(&dir_node->rcu, nm_dir_rcu_free);
+    if (dir_node && !(dir_node->_tag_ptr & 1UL)) {
+        smp_mb();
+        if (!rcu_access_pointer(dir_node->children) &&
+             cmpxchg(&dir_node->v_inode, NULL, (struct inode *)-1L) == NULL)
+                call_rcu(&dir_node->rcu, nm_dir_rcu_free);
+    }
 }
 
 struct nomount_proxy_ctx {
@@ -1060,6 +1064,9 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
         synchronize_srcu(&nomount_srcu);
         kfree_rcu(old_arr, rcu);
         kfree_rcu(child_to_free, rcu);
+        if (!(dir_node->_tag_ptr & 1UL) && !rcu_access_pointer(dir_node->iop) &&
+             !rcu_access_pointer(dir_node->fop) && cmpxchg(&dir_node->v_inode, NULL, (struct inode *)-1L) == NULL)
+            call_rcu(&dir_node->rcu, nm_dir_rcu_free);
         return;
     }
 
