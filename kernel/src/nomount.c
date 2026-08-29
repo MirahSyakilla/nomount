@@ -983,7 +983,6 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
 
     rule->parent_dir = dir_node;
     new_child->fake_ino = rule->v_hash;
-    new_child->name_hash = target_hash;
     new_child->d_type = (rule->flags & NM_FLAG_IS_DIR) ? DT_DIR : DT_REG;
     new_child->flags = rule->flags;
     new_child->name_len = name_len;
@@ -1229,6 +1228,7 @@ static struct nomount_rule *nm_alloc_rule(const char *v_path, const char *r_path
     rule->v_hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, v_path, v_len);
     rule->flags = flags;
     rule->v_len = v_len;
+    rule->r_len = r_len;
     rule->target_uid = target_uid;
     memcpy(nm_get_vpath(rule), v_path, v_len);
     nm_get_vpath(rule)[v_len] = '\0';
@@ -1453,7 +1453,7 @@ static int nm_process_payload(unsigned long user_addr)
             for (struct rb_node *node = rb_first_cached(&nomount_rules_tree); node; node = rb_next(node)) {
                 if (current_idx++ < payload->arg1) continue;
                 struct nomount_rule *r = rb_entry(node, struct nomount_rule, rb_node);
-                u16 r_len = r->flags & NM_FLAG_WHITEOUT ? 0 : strlen(nm_get_rpath(r));
+                u16 r_len = r->r_len;
                 if (buf_ptr + sizeof(struct nm_rule_hdr) + r->v_len + r_len > buf_end) { current_idx--; break; }
 
                 *(struct nm_rule_hdr *)buf_ptr = (struct nm_rule_hdr){.flags = r->flags, .uid = r->target_uid, .v_len = r->v_len, .r_len = r_len};

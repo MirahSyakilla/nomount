@@ -76,9 +76,7 @@ struct nm_inode_info {
 
 struct nomount_child_node {
     struct rcu_head rcu;
-    u32 name_hash;
     u32 fake_ino;
-    int id;
     u8 d_type;
     u8 flags;
     u16 name_len;
@@ -110,6 +108,7 @@ struct nomount_rule {
     u32 v_hash;
     unsigned int target_uid;
     u16 v_len;
+    u16 r_len;
     u8  flags;
 
     struct hlist_node vpath_node;
