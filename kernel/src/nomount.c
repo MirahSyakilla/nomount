@@ -992,11 +992,13 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
     if (old_count < capacity) {
         write_seqcount_begin(&dir_node->seq);
         if (pos < old_count) {
-            memmove(&old_arr->hashes[pos + 1], &old_arr->hashes[pos], (old_count - pos) * sizeof(u32));
-            memmove(&old_arr->nodes[pos + 1], &old_arr->nodes[pos], (old_count - pos) * sizeof(void *));
+            for (int i = old_count; i > pos; i--) {
+                WRITE_ONCE(old_arr->hashes[i], READ_ONCE(old_arr->hashes[i - 1]));
+                WRITE_ONCE(old_arr->nodes[i], READ_ONCE(old_arr->nodes[i - 1]));
+            }
         }
-        old_arr->hashes[pos] = target_hash;
-        old_arr->nodes[pos] = new_child;
+        WRITE_ONCE(old_arr->hashes[pos], target_hash);
+        WRITE_ONCE(old_arr->nodes[pos], new_child);
         old_arr->count++;
         dir_node->bloom_mask |= (1ULL << (target_hash & 63));
         write_seqcount_end(&dir_node->seq);
@@ -1033,7 +1035,7 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
     struct nomount_dir_node *dir_node = rule->parent_dir;
     struct nomount_child_node *child_to_free = NULL;
     struct nomount_child_array *old_arr;
-    int old_count, target_idx = -1, shift_len;
+    int old_count, target_idx = -1;
     u64 mask = 0;
 
     if (unlikely(!dir_node || !(old_arr = dir_node->children))) return;
@@ -1058,9 +1060,11 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
         return;
     }
 
-    if ((shift_len = old_count - 1 - target_idx) > 0) {
-        memmove(&old_arr->hashes[target_idx], &old_arr->hashes[target_idx + 1], shift_len * sizeof(u32));
-        memmove(&old_arr->nodes[target_idx], &old_arr->nodes[target_idx + 1], shift_len * sizeof(void *));
+    if (target_idx < old_count - 1) {
+        for (int i = target_idx; i < old_count - 1; i++) {
+            WRITE_ONCE(old_arr->hashes[i], READ_ONCE(old_arr->hashes[i + 1]));
+            WRITE_ONCE(old_arr->nodes[i], READ_ONCE(old_arr->nodes[i + 1]));
+        }
     }
     old_arr->count--;
 
