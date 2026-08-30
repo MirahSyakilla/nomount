@@ -816,7 +816,7 @@ static const struct file_operations nm_dir_fops = {
     .owner = THIS_MODULE,
     .open = nm_open,
     .release = nm_release,
-    .llseek = nm_llseek,
+    .llseek = default_llseek,
     .read = generic_read_dir,
     .iterate_shared = nm_dir_iterate_dir,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
