@@ -239,7 +239,7 @@ static void nomount_init_prealloc_inode(struct inode *inode, struct nm_inode_inf
     info->flags = rule_info->flags;
     info->dir_node = rule_info->this_dir;
     info->r_path = (!(rule_info->flags & NM_FLAG_VIRTUAL_DIR) && rule_info->r_path.dentry) ? rule_info->r_path : (struct path){ .mnt = NULL, .dentry = NULL };
-    info->v_ino = inode->i_ino = rule_info->v_ino;
+    inode->i_ino = rule_info->v_ino;
     inode->i_private = info;
 
     struct inode *r_inode = info->r_path.dentry ? d_backing_inode(info->r_path.dentry) : NULL;
@@ -584,7 +584,7 @@ static int nm_file_getattr(IDMAP_ARG const struct path *path, struct kstat *stat
 #else
         generic_fillattr(IDMAP_CALL v_inode, stat);
 #endif
-        stat->ino = info->v_ino;
+        stat->ino = v_inode->i_ino;
         stat->dev = v_inode->i_sb->s_dev;
         return 0;
     }
@@ -595,7 +595,7 @@ static int nm_file_getattr(IDMAP_ARG const struct path *path, struct kstat *stat
     res = vfs_getattr_nosec(&info->r_path, stat, request_mask, query_flags);
 #endif
     if (likely(res == 0)) {
-        stat->ino = info->v_ino;
+        stat->ino = v_inode->i_ino;
         stat->dev = v_inode->i_sb->s_dev;
     }
     return res;

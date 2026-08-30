@@ -70,7 +70,6 @@ struct nm_sop {
 struct nm_inode_info {
     struct path r_path;
     struct nomount_dir_node *dir_node;
-    unsigned long v_ino;
     u8 flags;
 };
 
