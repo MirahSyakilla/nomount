@@ -873,7 +873,7 @@ function initDelegationAndAttach() {
     const updateModuleCardDOM = async (card, modId) => {
         const { stdout } = await exec(`${NM_BIN} rule list --json 2>/dev/null`);
         const activeRules = JSON.parse(stdout.trim() || "[]");
-        let newFileCount = 0;º
+        let newFileCount = 0;
         activeRules.forEach(r => { if (r?.real?.startsWith(`${MOD_DIR}/${modId}/`)) newFileCount++; });
         const nowLoaded = newFileCount > 0;
         const toggleChecked = card.querySelector('.switch-input').checked;
