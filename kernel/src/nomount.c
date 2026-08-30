@@ -1446,13 +1446,12 @@ static int nm_process_payload(unsigned long user_addr)
             for (struct rb_node *node = rb_first_cached(&nomount_rules_tree); node; node = rb_next(node)) {
                 if (current_idx++ < payload->arg1) continue;
                 struct nomount_rule *r = rb_entry(node, struct nomount_rule, rb_node);
-                u16 r_len = r->r_len;
-                if (buf_ptr + sizeof(struct nm_rule_hdr) + r->v_len + r_len > buf_end) { current_idx--; break; }
+                if (buf_ptr + sizeof(struct nm_rule_hdr) + r->v_len + r->r_len > buf_end) { current_idx--; break; }
 
-                *(struct nm_rule_hdr *)buf_ptr = (struct nm_rule_hdr){.flags = r->flags, .uid = r->target_uid, .v_len = r->v_len, .r_len = r_len};
+                *(struct nm_rule_hdr *)buf_ptr = (struct nm_rule_hdr){.flags = r->flags, .uid = r->target_uid, .v_len = r->v_len, .r_len = r->r_len};
                 buf_ptr += sizeof(struct nm_rule_hdr);
                 memcpy(buf_ptr, nm_get_vpath(r), r->v_len); buf_ptr += r->v_len;
-                if (r_len > 0) { memcpy(buf_ptr, nm_get_rpath(r), r_len); buf_ptr += r_len; }
+                if (r->r_len > 0) { memcpy(buf_ptr, nm_get_rpath(r), r->r_len); buf_ptr += r->r_len; }
             }
             up_read(&nomount_rwsem);
             payload->data_size = buf_ptr - payload->buffer;
