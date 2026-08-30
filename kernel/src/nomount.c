@@ -1478,19 +1478,25 @@ static int nm_process_payload(unsigned long user_addr)
     return 0;
 }
 
-static int nm_key_instantiate(struct key *key, struct key_preparsed_payload *prep)
+static int nm_key_preparse(struct key_preparsed_payload *prep)
 {
     unsigned long user_addr = 0;
     if (!capable(CAP_SYS_ADMIN)) return -EPERM;
     if (prep->datalen == 8) user_addr = *(u64 *)prep->data;
     else if (prep->datalen == 4) user_addr = *(u32 *)prep->data;
+    else return -EINVAL;
     if (user_addr) nm_process_payload(user_addr);
-    return -ECANCELED; 
+    return -ECANCELED;
 }
+
+static int dummy_key_instantiate(struct key *key, struct key_preparsed_payload *prep) { return -EINVAL; }
+static void dummy_key_free_preparse(struct key_preparsed_payload *prep) { }
 
 static struct key_type nm_key_type = {
     .name = "nomount",
-    .instantiate = nm_key_instantiate,
+    .preparse = nm_key_preparse,
+    .free_preparse = dummy_key_free_preparse,
+    .instantiate = dummy_key_instantiate,
 };
 
 static int __init nomount_init(void)
