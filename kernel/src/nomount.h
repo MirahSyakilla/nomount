@@ -319,4 +319,9 @@ static inline int nm_call_iterate(struct file *file, struct dir_context *ctx, co
     return -ENOTDIR;
 }
 
+static __always_inline struct dentry *nm_hash_and_lookup(struct dentry *dir, struct qstr *n) {
+    n->hash = full_name_hash(dir, n->name, n->len);
+    return (unlikely(dir->d_flags & DCACHE_OP_HASH) && dir->d_op->d_hash(dir, n) < 0) ? NULL : d_lookup(dir, n);
+}
+
 #endif /* _LINUX_NOMOUNT_H */

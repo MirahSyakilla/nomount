@@ -1115,14 +1115,9 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
             dir_node = nomount_get_dir_node(v_inode);
             if (!dir_node) dir_node = __nomount_alloc_dir_node(v_inode);
             if (likely(dir_node)) {
-                struct dentry *dentry;
-                struct qstr qname = { .name = child_name, .len = child_len };
-                (p_path.dentry->d_flags & DCACHE_OP_HASH) ? p_path.dentry->d_op->d_hash(p_path.dentry, &qname)
-                 : (qname.hash = full_name_hash(p_path.dentry, child_name, child_len));
-
                 nomount_hijack_dir_ops(dir_node, v_inode);
                 nomount_hijack_superblock(p_path.dentry->d_sb);
-                dentry = d_lookup(p_path.dentry, &qname);
+                struct dentry *dentry = nm_hash_and_lookup(p_path.dentry, &(struct qstr)QSTR_INIT(child_name, child_len));
                 if (dentry) { d_drop(dentry); dput(dentry); }
 
                 __nomount_inject_child_locked(dir_node, current_rule, child_name, child_len);
