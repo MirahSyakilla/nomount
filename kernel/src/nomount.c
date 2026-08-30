@@ -565,9 +565,9 @@ static ssize_t nm_listxattr(struct dentry *dentry, char *buffer, size_t size)
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
-static int nm_file_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)
+static int nm_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)
 #else
-static int nm_file_getattr(IDMAP_ARG const struct path *path, struct kstat *stat, u32 request_mask, unsigned int query_flags)
+static int nm_getattr(IDMAP_ARG const struct path *path, struct kstat *stat, u32 request_mask, unsigned int query_flags)
 #endif
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
@@ -575,29 +575,27 @@ static int nm_file_getattr(IDMAP_ARG const struct path *path, struct kstat *stat
 #endif
     struct inode *v_inode = d_backing_inode(dentry);
     struct nm_inode_info *info = v_inode->i_private;
-    int res;
-    if (unlikely(!info)) return -EIO;
+    int res = 0;
 
-    if (unlikely(info->flags & NM_FLAG_VIRTUAL_DIR)) {
+    if (unlikely(!info)) return -EIO;
+    if (unlikely(info->flags & NM_FLAG_VIRTUAL_DIR))
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
         generic_fillattr(IDMAP_CALL request_mask, v_inode, stat);
 #else
         generic_fillattr(IDMAP_CALL v_inode, stat);
 #endif
-        stat->ino = v_inode->i_ino;
-        stat->dev = v_inode->i_sb->s_dev;
-        return 0;
-    }
-
+    else
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
-    res = vfs_getattr_nosec(&info->r_path, stat);
+        res = vfs_getattr_nosec(&info->r_path, stat);
 #else
-    res = vfs_getattr_nosec(&info->r_path, stat, request_mask, query_flags);
+        res = vfs_getattr_nosec(&info->r_path, stat, request_mask, query_flags);
 #endif
+
     if (likely(res == 0)) {
         stat->ino = v_inode->i_ino;
         stat->dev = v_inode->i_sb->s_dev;
     }
+    
     return res;
 }
 
@@ -806,7 +804,7 @@ static const struct file_operations nm_file_fops = {
 };
 
 static const struct inode_operations nm_file_iops = {
-    .getattr = nm_file_getattr,
+    .getattr = nm_getattr,
     .setattr = nm_setattr,
     .listxattr = nm_listxattr,
     .get_link = nm_get_link,
@@ -826,7 +824,7 @@ static const struct file_operations nm_dir_fops = {
 
 static const struct inode_operations nm_dir_iops = {
     .lookup = nm_dir_lookup,
-    .getattr = nm_file_getattr,
+    .getattr = nm_getattr,
     .setattr = nm_setattr,
     .listxattr = nm_listxattr,
 };
