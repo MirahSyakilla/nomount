@@ -117,6 +117,17 @@ struct nm_payload {
     char buffer[4068];
 } __attribute__((packed));
 
+
+struct nm_workspace {
+    struct nm_payload payload;
+    char cwd[PATH_MAX];
+    char virtual_path[PATH_MAX];
+    char real_path[PATH_MAX];
+} __attribute__((aligned(4096)));
+
+_Static_assert(sizeof(struct nm_payload) == 4096, "payload must occupy one page");
+_Static_assert(__builtin_offsetof(struct nm_workspace, payload) == 0, "payload must start at the workspace boundary");
+
 struct nm_rule_hdr {
     unsigned int flags;
     unsigned int uid;
