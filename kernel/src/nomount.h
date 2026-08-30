@@ -96,18 +96,19 @@ struct nomount_rule {
         struct rb_node rb_node;
         struct hlist_node vpath_node;
     };
+    union {
+        struct path r_path;
+        struct nomount_dir_node *this_dir;
+    };
+    unsigned long v_ino;
     u32 v_hash;
     unsigned int target_uid;
     u16 v_len;
     u16 r_len;
     u16 child_len;
-    u8  flags;
-
+    u16 flags;
     struct nomount_dir_node *parent_dir;
-    struct nomount_dir_node *this_dir;
-    struct path r_path;
-    unsigned long v_ino;
-    char paths[]; 
+    char paths[];
 };
 
 #define nm_get_child_name(rule) (nm_get_vpath(rule) + (rule)->v_len - (rule)->child_len)
@@ -118,10 +119,12 @@ static __always_inline struct nomount_rule **nm_get_child_rules(struct nomount_c
 }
 
 struct nm_rule_info {
-    u32 flags;
+    union {
+        struct path r_path;
+        struct nomount_dir_node *this_dir;
+    };
     unsigned long v_ino;
-    struct path r_path;
-    struct nomount_dir_node *this_dir;
+    u16 flags;
 };
 
 /*** Operaction Vectors ***/

@@ -82,12 +82,10 @@ static __always_inline bool __nomount_get_rule_info(struct nomount_dir_node *dir
                 if (rule_info) {
                     rule_info->flags = rule->flags;
                     rule_info->v_ino = rule->v_ino;
-                    rule_info->this_dir = rule->this_dir;
-                    (get_path && rule->r_path.dentry) ? (void)(rule_info->r_path = rule->r_path) : (void)(rule_info->r_path.dentry = NULL);
+                    if (rule->flags & NM_FLAG_VIRTUAL_DIR) rule_info->this_dir = rule->this_dir;
+                    else (get_path && rule->r_path.dentry) ? (rule_info->r_path = rule->r_path) : (rule_info->r_path = (struct path){ .dentry = NULL, .mnt = NULL });
                 }
                 found = true;
-            } else {
-                found = false;
             }
         }
     } while (read_seqcount_retry(&dir_node->seq, seq));
@@ -236,13 +234,19 @@ static inline void nomount_emit_virtual_children(struct dir_context *ctx, struct
 
 static void nomount_init_prealloc_inode(struct inode *inode, struct nm_inode_info *info, struct nm_rule_info *rule_info)
 {
+    struct inode *r_inode = NULL;
     info->flags = rule_info->flags;
-    info->dir_node = rule_info->this_dir;
-    info->r_path = (!(rule_info->flags & NM_FLAG_VIRTUAL_DIR) && rule_info->r_path.dentry) ? rule_info->r_path : (struct path){ .mnt = NULL, .dentry = NULL };
+    if (rule_info->flags & NM_FLAG_VIRTUAL_DIR) {
+        info->dir_node = rule_info->this_dir;
+        info->r_path = (struct path){ .dentry = NULL, .mnt = NULL };
+    } else {
+        info->dir_node = NULL;
+        info->r_path = rule_info->r_path.dentry ? rule_info->r_path : (struct path){ .dentry = NULL, .mnt = NULL };
+        r_inode = info->r_path.dentry ? d_backing_inode(info->r_path.dentry) : NULL;
+    }
+
     inode->i_ino = rule_info->v_ino;
     inode->i_private = info;
-
-    struct inode *r_inode = info->r_path.dentry ? d_backing_inode(info->r_path.dentry) : NULL;
     inode->i_mode   = r_inode ? r_inode->i_mode    : (S_IFDIR | 0755);
     inode->i_size   = r_inode ? i_size_read(r_inode) : 4096;
     inode->i_blocks = r_inode ? r_inode->i_blocks  : 8;
@@ -250,15 +254,14 @@ static void nomount_init_prealloc_inode(struct inode *inode, struct nm_inode_inf
     inode->i_gid    = r_inode ? r_inode->i_gid     : GLOBAL_ROOT_GID;
     inode->i_op     = (r_inode && !S_ISDIR(r_inode->i_mode)) ? &nm_file_iops : &nm_dir_iops;
 
-    if (r_inode && !S_ISDIR(r_inode->i_mode)) {
+    if (r_inode && !S_ISDIR(r_inode->i_mode))
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0)
         inode->i_fop = (r_inode->i_fop && r_inode->i_fop->mmap_prepare) ? &nm_file_fops_mmap_prepare : &nm_file_fops;
 #else
         inode->i_fop = &nm_file_fops;
 #endif
-    } else {
+    else
         inode->i_fop = &nm_dir_fops;
-    }
 
     if (r_inode) nm_sync_inode_times(inode, r_inode), inode->i_mapping = r_inode->i_mapping;
     inode->i_flags |= S_PRIVATE | S_NOATIME | S_NOCMTIME | S_NOSEC;
@@ -298,7 +301,7 @@ static struct dentry *nomount_resolve_rule_dentry(struct inode *dir, struct dent
     }
 
     if (likely(prealloc_inode && ((rule_info.flags & NM_FLAG_VIRTUAL_DIR) || rule_info.r_path.dentry))) {
-        if (rule_info.this_dir && (splice_inode = cmpxchg(&rule_info.this_dir->v_inode, NULL, prealloc_inode))) {
+        if ((rule_info.flags & NM_FLAG_VIRTUAL_DIR) && rule_info.this_dir && (splice_inode = cmpxchg(&rule_info.this_dir->v_inode, NULL, prealloc_inode))) {
             if (splice_inode == (struct inode *)-1L) goto unlock_out;
             igrab(splice_inode);
         } else {
@@ -1097,7 +1100,7 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
         size_t child_len = p_len - i - 1;
         u32 h_parent = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, v_path, parent_len);
 
-        if ((ex = nm_tree_search_path(h_parent, parent_len, v_path))) {
+        if ((ex = nm_tree_search_path(h_parent, parent_len, v_path)) && (ex->flags & NM_FLAG_VIRTUAL_DIR)) {
             dir_node = ex->this_dir ? ex->this_dir : __nomount_alloc_dir_node(NULL);
             if (unlikely(!dir_node)) { err = -ENOMEM; break; }
             dir_node->_tag_ptr = (unsigned long)ex | 1UL;
@@ -1177,7 +1180,6 @@ static void nomount_prune_empty_virtual_dirs(struct nomount_dir_node *dir_node, 
            (owner = (dir_node->_tag_ptr & 1UL) ? (struct nomount_rule *)(dir_node->_tag_ptr & ~1UL) : NULL)) {
 
        if (!(owner->flags & NM_FLAG_VIRTUAL_DIR)) {
-            owner->this_dir = NULL;
             if (cmpxchg(&dir_node->v_inode, NULL, (struct inode *)-1L) == NULL) {
                 nm_detach_dir_node(dir_node);
                 call_rcu(&dir_node->rcu, nm_dir_rcu_free);
@@ -1243,16 +1245,16 @@ static struct nomount_rule *nm_alloc_rule(const char *v_path, const char *r_path
 
 static void nm_free_rule(struct nomount_rule *rule)
 {
-    if (unlikely(!rule)) return;
-    if (rule->r_path.dentry) path_put(&rule->r_path);
-    if (rule->this_dir) {
-        if (cmpxchg(&rule->this_dir->v_inode, NULL, (struct inode *)-1L) == NULL) {
-            nm_detach_dir_node(rule->this_dir);
-            call_rcu(&rule->this_dir->rcu, nm_dir_rcu_free);
-        } else {
-            WRITE_ONCE(rule->this_dir->_tag_ptr, 1UL);
+    if (rule->flags & NM_FLAG_VIRTUAL_DIR) {
+        if (rule->this_dir) {
+            if (cmpxchg(&rule->this_dir->v_inode, NULL, (struct inode *)-1L) == NULL) {
+                nm_detach_dir_node(rule->this_dir);
+                call_rcu(&rule->this_dir->rcu, nm_dir_rcu_free);
+            } else {
+                WRITE_ONCE(rule->this_dir->_tag_ptr, 1UL);
+            }
         }
-    }
+    } else if (rule->r_path.dentry) path_put(&rule->r_path);
     kfree(rule);
 }
 
@@ -1277,7 +1279,7 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
 
     down_write(&nomount_rwsem);
     if ((existing = nm_tree_search_exact(rule->v_hash, v_len, nm_get_vpath(rule), target_uid))) {
-        if (existing->this_dir) {
+        if ((existing->flags & NM_FLAG_VIRTUAL_DIR) && existing->this_dir && (rule->flags & NM_FLAG_VIRTUAL_DIR)) {
             if (rule->this_dir) call_rcu(&rule->this_dir->rcu, nm_dir_rcu_free);
             rule->this_dir = existing->this_dir;
             if (rule->this_dir->_tag_ptr & 1UL) rule->this_dir->_tag_ptr = (unsigned long)rule | 1UL;
