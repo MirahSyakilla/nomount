@@ -133,11 +133,14 @@ void c_main(long *sp) {
         case ACTION_UID_ADD:
         case ACTION_UID_DEL: {
             if (p_count < 1) goto do_exit;
-            unsigned int uid = 0; const char *s = argv[0];
-            while (*s) uid = (uid << 3) + (uid << 1) + (*s++ - '0');
             payload->cmd = (action == ACTION_UID_ADD) ? NM_CMD_ADD_UID : NM_CMD_DEL_UID;
-            payload->target_uid = uid;
-            exit_code = (nm_send_payload(payload) < 0);
+            for (int i = 0; i < p_count; i++) {
+                unsigned int uid = 0;
+                const char *s = argv[i];
+                while (*s) uid = (uid << 3) + (uid << 1) + (*s++ - '0');
+                payload->target_uid = uid;
+                exit_code = (nm_send_payload(payload) < 0);
+            }
             break;
         }
 

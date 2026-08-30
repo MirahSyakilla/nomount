@@ -1052,7 +1052,7 @@ function initDelegationAndAttach() {
                     });
 
                     await writeExclusionsJson(currentData);
-                    await exec(`for u in ${uidsBash.join(' ')}; do ${NM_BIN} uid add $u; done`);
+                    await exec(`${NM_BIN} uid add ${uidsBash.join(' ')}`);
                     showToast(`${appsToSave.size} apps added`);
                 } catch { showToast(translate('error_blocking') || 'Error'); }
                 await loadExclusions();
