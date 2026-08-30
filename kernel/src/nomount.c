@@ -1026,8 +1026,10 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
     dir_node->bloom_mask |= (1ULL << (target_hash & 63));
     write_seqcount_end(&dir_node->seq);
 
-    synchronize_srcu(&nomount_srcu);
-    if (old_arr) kfree_rcu(old_arr, rcu);
+    if (old_arr) {
+        synchronize_srcu(&nomount_srcu);
+        kfree_rcu(old_arr, rcu);
+    }
 }
 
 static void __nomount_delete_child_locked(struct nomount_rule *rule)
@@ -1073,7 +1075,6 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
     for (int i = 0; i < old_arr->count; i++) mask |= (1ULL << (old_arr->hashes[i] & 63));
     dir_node->bloom_mask = mask;
     write_seqcount_end(&dir_node->seq);
-    synchronize_srcu(&nomount_srcu);
 }
 
 static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
