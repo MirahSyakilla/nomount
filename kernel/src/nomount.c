@@ -1273,11 +1273,10 @@ static void nm_detach_rule_locked(struct nomount_rule *rule, struct hlist_head *
     hlist_add_head(&rule->vpath_node, victims);
 }
 
-static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len, u16 r_len, u32 flags, unsigned int target_uid)
+static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len, u16 r_len, u32 flags,
+                              unsigned int target_uid, struct hlist_head *r_victims)
 {
-    struct nomount_rule *rule, *existing, *victim_rule;
-    struct hlist_node *tmp;
-    HLIST_HEAD(victims);
+    struct nomount_rule *rule, *existing;
     int err = 0;
 
     if (IS_ERR((rule = nm_alloc_rule(v_path, r_path, v_len, r_len, flags, target_uid))))
@@ -1291,27 +1290,18 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
             if (rule->this_dir->_tag_ptr & 1UL) rule->this_dir->_tag_ptr = (unsigned long)rule | 1UL;
             existing->this_dir = NULL;
         }
-        nm_detach_rule_locked(existing, &victims, false);
+        nm_detach_rule_locked(existing, r_victims, false);
         nm_info("Shadowing existing rule for: %s\n", nm_get_vpath(rule));
     }
 
     if ((err = nomount_generate_virtual_topology(rule)) != 0) {
         up_write(&nomount_rwsem);
-        nm_free_rule(rule); 
-        synchronize_rcu(); synchronize_srcu(&nomount_srcu);
-        hlist_for_each_entry_safe(victim_rule, tmp, &victims, vpath_node)
-            nm_free_rule(victim_rule);
+        nm_free_rule(rule);
         return err;
     }
 
     nm_tree_insert(rule);
     up_write(&nomount_rwsem);
-
-    if (!hlist_empty(&victims)) {
-        synchronize_rcu(); synchronize_srcu(&nomount_srcu);
-        hlist_for_each_entry_safe(victim_rule, tmp, &victims, vpath_node)
-            nm_free_rule(victim_rule);
-    }
 
     (flags & NM_FLAG_WHITEOUT) ? nm_info("Successfully added whiteout rule: %s\n", nm_get_vpath(rule))
     : nm_info("Successfully added injection rule: %s -> %s\n", nm_get_vpath(rule), nm_get_rpath(rule));
@@ -1380,16 +1370,24 @@ static int nm_process_payload(unsigned long user_addr)
             memcpy(payload->buffer, NOMOUNT_VERSION, (payload->data_size = strlen(NOMOUNT_VERSION)));
             break;
 
-        case NM_CMD_ADD_RULE:
+        case NM_CMD_ADD_RULE: {
+            HLIST_HEAD(r_victims);
             if (payload->data_size > sizeof(payload->buffer)) { payload->status = -EINVAL; break; }
             while (buf_ptr + sizeof(struct nm_rule_hdr) <= buf_end) {
                 struct nm_rule_hdr *h = (void *)buf_ptr;
                 if ((buf_ptr += sizeof(*h)) + h->v_len + h->r_len > buf_end || unlikely(h->v_len >= PATH_MAX || h->r_len >= PATH_MAX)) break;
-                payload->status = __nomount_add_rule(buf_ptr, buf_ptr + h->v_len, h->v_len, h->r_len, h->flags, h->uid);
+                payload->status = __nomount_add_rule(buf_ptr, buf_ptr + h->v_len, h->v_len, h->r_len, h->flags, h->uid, &r_victims);
                 buf_ptr += h->v_len + h->r_len;
             }
             payload->arg1 = buf_ptr - payload->buffer;
+
+            if (!hlist_empty(&r_victims)) {
+                struct nomount_rule *rule; struct hlist_node *tmp;
+                synchronize_rcu(); synchronize_srcu(&nomount_srcu);
+                hlist_for_each_entry_safe(rule, tmp, &r_victims, vpath_node) nm_free_rule(rule);
+            }
             break;
+        }
 
         case NM_CMD_DEL_RULE: {
             HLIST_HEAD(r_victims);    
