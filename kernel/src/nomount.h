@@ -92,7 +92,10 @@ struct nomount_dir_node {
 };
 
 struct nomount_rule {
-    struct rb_node rb_node;
+    union {
+        struct rb_node rb_node;
+        struct hlist_node vpath_node;
+    };
     u32 v_hash;
     unsigned int target_uid;
     u16 v_len;
@@ -100,7 +103,6 @@ struct nomount_rule {
     u16 child_len;
     u8  flags;
 
-    struct hlist_node vpath_node;
     struct nomount_dir_node *parent_dir;
     struct nomount_dir_node *this_dir;
     struct path r_path;
