@@ -6,6 +6,45 @@
 
 Unlike traditional mount solutions like Magic Mount or OverlayFS that rely on modifying the mount table and polluting `/proc/mounts`, NoMount operates purely in RAM. Instead of making a real mount, it intercepts path resolution and directory iteration dynamically, making file injections completely transparent to the Android system and userspace apps without generating any mounts.
 
+<details>
+<summary><strong>View Screenshots</strong></summary>
+<br>
+<table>
+  <tr>
+    <td width="50%" align="center"><a href="assets/module_1.jpg"><img src="assets/module_1.jpg" width="100%" alt="Home Status"></a></td>
+    <td width="50%" align="center"><a href="assets/module_2.jpg"><img src="assets/module_2.jpg" width="100%" alt="Modules List"></a></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Home Status</b></sub></td>
+    <td align="center"><sub><b>Modules List</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><a href="assets/module_3.jpg"><img src="assets/module_3.jpg" width="100%" alt="Exclusions Empty"></a></td>
+    <td width="50%" align="center"><a href="assets/module_4.jpg"><img src="assets/module_4.jpg" width="100%" alt="Exclusions Active"></a></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Exclusions Empty</b></sub></td>
+    <td align="center"><sub><b>Exclusions Active</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><a href="assets/module_5.jpg"><img src="assets/module_5.jpg" width="100%" alt="App Selector"></a></td>
+    <td width="50%" align="center"><a href="assets/module_6.jpg"><img src="assets/module_6.jpg" width="100%" alt="Manual UID Entry"></a></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>App Selector</b></sub></td>
+    <td align="center"><sub><b>Manual Entry</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><a href="assets/module_7.jpg"><img src="assets/module_7.jpg" width="100%" alt="Options"></a></td>
+    <td width="50%" align="center"><a href="assets/module_8.jpg"><img src="assets/module_8.jpg" width="100%" alt="Installation"></a></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Options</b></sub></td>
+    <td align="center"><sub><b>Installation</b></sub></td>
+  </tr>
+</table>
+</details>
+
 ## How it Works
 
 When you set up a redirection, you provide two paths: the original file the system expects to find (e.g., `/vendor/etc/audio.conf`), and your modified file located elsewhere (e.g., `/data/local/tmp/mod.conf`).
