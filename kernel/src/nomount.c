@@ -24,20 +24,6 @@ static __always_inline bool nomount_is_uid_blocked(uid_t uid)
     (likely(__p) && __p->field == (hook_func)) ? container_of(__p, type, member) : NULL; \
 })
 
-static __always_inline struct nomount_dir_node *nomount_get_dir_node(struct inode *inode) 
-{
-    struct nm_iop *nm_iop;
-    struct nm_fop *nm_fop;
-
-    nm_iop = __get_nm(smp_load_acquire(&inode->i_op), struct nm_iop, fake_iop, lookup, nomount_hijacked_lookup);
-    if (nm_iop && nm_iop->dir_node) return nm_iop->dir_node;
-
-    nm_fop = __get_nm(smp_load_acquire(&inode->i_fop), struct nm_fop, fake_fop, iterate_shared, nomount_hijacked_iterate_dir);
-    if (nm_fop && nm_fop->dir_node) return nm_fop->dir_node;
-    
-    return NULL;
-}
-
 static __always_inline struct nomount_rule *nomount_bsearch_child(struct nomount_child_array *arr, const char *name, size_t len, u32 hash, int *index)
 {
     int l = 0, n = arr->count;
@@ -1080,7 +1066,11 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
         if (i > 0) v_path[i] = '\0';
         if ((p = kern_path((parent_len == 1) ? "/" : v_path, LOOKUP_FOLLOW, &p_path)), (v_path[i] = orig_vpath), (p == 0)) {
             struct inode *v_inode = d_backing_inode(p_path.dentry);
-            dir_node = nomount_get_dir_node(v_inode);
+            dir_node = ({
+                struct nm_iop *iop = __get_nm(smp_load_acquire(&v_inode->i_op), struct nm_iop, fake_iop, lookup, nomount_hijacked_lookup);
+                struct nm_fop *fop = __get_nm(smp_load_acquire(&v_inode->i_fop), struct nm_fop, fake_fop, iterate_shared, nomount_hijacked_iterate_dir);
+                (iop && iop->dir_node) ? iop->dir_node : (fop ? fop->dir_node : NULL);
+            });
             if (!dir_node) dir_node = __nomount_alloc_dir_node(v_inode);
             if (likely(dir_node)) {
                 nomount_hijack_dir_ops(dir_node, v_inode);
