@@ -874,7 +874,7 @@ static void nomount_hijack_dentry_ops(struct dentry *dentry)
         dentry->d_op = &nm_dops;
         dentry->d_flags &= ~(DCACHE_OP_WEAK_REVALIDATE | DCACHE_OP_DELETE | DCACHE_OP_PRUNE
                              | DCACHE_OP_COMPARE | DCACHE_OP_HASH | DCACHE_OP_REAL);
-        dentry->d_flags |= DCACHE_OP_REVALIDATE;
+        dentry->d_flags |= (DCACHE_OP_REVALIDATE | DCACHE_DONTCACHE);
     }
     spin_unlock(&dentry->d_lock);
 }

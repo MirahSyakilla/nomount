@@ -289,6 +289,10 @@ struct nm_del_hdr {
     #define FLAGS_VAL /* Nothing */
 #endif
 
+#ifndef DCACHE_DONTCACHE
+# define DCACHE_DONTCACHE 0
+#endif
+
 static inline void nm_sync_inode_times(struct inode *v_inode, struct inode *r_inode)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
