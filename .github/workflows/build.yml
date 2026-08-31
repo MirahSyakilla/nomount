@@ -61,10 +61,10 @@ jobs:
           git clone https://github.com/maxsteeel/ko-loader.git ko_loader_src
           cd ko_loader_src
 
-          make TARGET=aarch64-linux
+          make TARGET=aarch64-linux-musl
           mv ko-loader ko-loader-arm64
 
-          make TARGET=arm-linux
+          make TARGET=arm-linux-musleabihf
           mv ko-loader ko-loader-arm
 
           ../sstrip -z ko-loader-arm64
