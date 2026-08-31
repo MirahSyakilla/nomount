@@ -32,13 +32,13 @@ static __always_inline struct nomount_rule *nomount_bsearch_child(struct nomount
 
     if (unlikely(n <= 0)) return NULL;
     while (n > 0) {
-        int step = n >> 1, m = l + step, less = (hashes[m] < hash);
-        l = less ? m + 1 : l;
-        n = less ? n - step - 1 : step;
+        int step = n >> 1, m = l + step, less = (hashes[m] < hash), mask = -less;
+        l += (step + 1) & mask;
+        n = step + ((n - (step << 1) - 1) & mask);
     }
     while (l < arr->count && hashes[l] == hash) {
         struct nomount_rule *rule = READ_ONCE(rules[l]);
-        if (rule && rule->child_len == len && !memcmp(nm_get_child_name(rule), name, len)) {
+        if (likely(rule && rule->child_len == len) && !memcmp(nm_get_child_name(rule), name, len)) {
             if (index) *index = l;
             return rule;
         }
