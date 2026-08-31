@@ -159,7 +159,6 @@ static NM_ACTOR_RET nomount_actor_proxy(struct dir_context *ctx, const char *nam
 {
     struct nomount_proxy_ctx *proxy = container_of(ctx, struct nomount_proxy_ctx, ctx);
     NM_ACTOR_RET ret;
-    bool is_injected = false;
 
     if (proxy->dir_node) {
         u32 hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name, namelen);
@@ -172,16 +171,14 @@ static NM_ACTOR_RET nomount_actor_proxy(struct dir_context *ctx, const char *nam
                 struct nomount_rule *rule;
                 seq = read_seqcount_begin(&proxy->dir_node->seq);
                 arr = rcu_dereference(proxy->dir_node->children);
-                is_injected = likely(arr) && (rule = nomount_bsearch_child(arr, name, namelen, hash, NULL)) &&
-                                              (!rule->target_uid || rule->target_uid == fsuid);
+                if (likely(arr) && (rule = nomount_bsearch_child(arr, name, namelen, hash, NULL)) && (!rule->target_uid || rule->target_uid == fsuid)) {
+                    rcu_read_unlock();
+                    proxy->ctx.pos = offset;
+                    return NM_ACTOR_CONTINUE;
+                }
             } while (read_seqcount_retry(&proxy->dir_node->seq, seq));
             rcu_read_unlock();
         }
-    }
-
-    if (is_injected) {
-        proxy->ctx.pos = offset;
-        return NM_ACTOR_CONTINUE;
     }
 
     proxy->orig_ctx->pos = proxy->ctx.pos;
