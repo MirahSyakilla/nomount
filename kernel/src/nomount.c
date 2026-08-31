@@ -2,15 +2,10 @@
 #include <linux/fs.h>
 #include <linux/file.h>
 #include <linux/namei.h>
-#include <linux/slab.h>
 #include <linux/cred.h>
 #include <linux/xattr.h>
 #include <linux/module.h>
 #include "nomount.h"
-
-static struct kmem_cache *nm_dir_cachep __read_mostly, *nm_inode_cachep __read_mostly;
-static struct kmem_cache *nm_iop_cachep __read_mostly, *nm_fop_cachep __read_mostly;
-static DEFINE_STATIC_KEY_FALSE(nomount_active_uids);
 
 /*** Helpers ***/
 
@@ -106,21 +101,10 @@ static __always_inline bool nomount_get_rule_info(struct nomount_dir_node *dir_n
     return found;
 }
 
-#define NM_DEFINE_RCU_FREE(_name, _type, _cache, ...) \
-static void _name(struct rcu_head *head) { \
-    _type *obj = container_of(head, _type, rcu); \
-    __VA_ARGS__ \
-    kmem_cache_free(_cache, obj); \
-}
-NM_DEFINE_RCU_FREE(nm_iop_rcu_free, struct nm_iop, nm_iop_cachep)
-NM_DEFINE_RCU_FREE(nm_fop_rcu_free, struct nm_fop, nm_fop_cachep)
-
 static void nm_dir_rcu_free(struct rcu_head *head)
 {
     struct nomount_dir_node *dir = container_of(head, struct nomount_dir_node, rcu);
-    struct nomount_child_array *arr = dir->children;
-    kfree(arr);
-    kmem_cache_free(nm_dir_cachep, dir);
+    kfree(dir->children); kfree(dir);
 }
 
 static inline void nm_destroy_virtual_inode(struct inode *inode)
@@ -135,7 +119,7 @@ static inline void nm_destroy_virtual_inode(struct inode *inode)
             call_rcu(&info->dir_node->rcu, nm_dir_rcu_free);
     }
 
-    kmem_cache_free(nm_inode_cachep, info);
+    kfree(info);
     inode->i_private = NULL;
 }
 
@@ -148,12 +132,12 @@ static inline void nm_destroy_hijacked_inode(struct inode *inode, bool restore)
     if (nm_iop) {
         if (dir_node) RCU_INIT_POINTER(dir_node->iop, NULL);
         if (restore) smp_store_release(&inode->i_op, nm_iop->orig_iop);
-        call_rcu(&nm_iop->rcu, nm_iop_rcu_free);
+        kfree_rcu(nm_iop, rcu);
     }
     if (nm_fop) {
         if (dir_node) RCU_INIT_POINTER(dir_node->fop, NULL);
         if (restore) smp_store_release(&inode->i_fop, nm_fop->orig_fop);
-        call_rcu(&nm_fop->rcu, nm_fop_rcu_free);
+        kfree_rcu(nm_fop, rcu);
     }
     if (dir_node && !(dir_node->_tag_ptr & 1UL)) {
         smp_mb();
@@ -279,7 +263,7 @@ static struct dentry *nomount_resolve_rule_dentry(struct inode *dir, struct dent
         return res;
 
     if (likely((prealloc_inode = new_inode(dir->i_sb)))) {
-        if (unlikely(!(prealloc_info = kmem_cache_alloc(nm_inode_cachep, GFP_KERNEL)))) {
+        if (unlikely(!(prealloc_info = kmalloc(sizeof(*prealloc_info), GFP_KERNEL)))) {
             iput(prealloc_inode);
             prealloc_inode = NULL;
         }
@@ -325,7 +309,7 @@ cleanup_out:
         path_put(&rule_info.r_path);
 
     if (prealloc_inode) {
-        kmem_cache_free(nm_inode_cachep, prealloc_info);
+        kfree(prealloc_info);
         iput(prealloc_inode);
     }    
     return res;
@@ -882,7 +866,7 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
     struct nm_fop *nm_fop = NULL;
 
     if (inode->i_op && !__get_nm(smp_load_acquire(&inode->i_op), struct nm_iop, fake_iop, lookup, nomount_hijacked_lookup)) {
-        if (likely((nm_iop = kmem_cache_zalloc(nm_iop_cachep, GFP_KERNEL)))) {
+        if (likely((nm_iop = kzalloc(sizeof(*nm_iop), GFP_KERNEL)))) {
             nm_iop->fake_iop = *(inode->i_op);
             nm_iop->orig_iop = inode->i_op;
             nm_iop->dir_node = dir_node;
@@ -894,7 +878,7 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
     }
 
     if (inode->i_fop && !__get_nm(smp_load_acquire(&inode->i_fop), struct nm_fop, fake_fop, iterate_shared, nomount_hijacked_iterate_dir)) {
-        if (likely((nm_fop = kmem_cache_zalloc(nm_fop_cachep, GFP_KERNEL)))) {
+        if (likely((nm_fop = kzalloc(sizeof(*nm_fop), GFP_KERNEL)))) {
             nm_fop->fake_fop = *(inode->i_fop);
             nm_fop->orig_fop = inode->i_fop;
             nm_fop->dir_node = dir_node;
@@ -960,7 +944,7 @@ static void nomount_restore_superblocks(void)
 
 static __always_inline struct nomount_dir_node *__nomount_alloc_dir_node(struct inode *inode) 
 {
-    struct nomount_dir_node *dir_node = kmem_cache_zalloc(nm_dir_cachep, GFP_KERNEL);
+    struct nomount_dir_node *dir_node = kzalloc(sizeof(*dir_node), GFP_KERNEL);
     if (unlikely(!dir_node)) return NULL;
     seqcount_init(&dir_node->seq); 
     return dir_node;
@@ -1494,27 +1478,9 @@ static struct key_type nm_key_type = {
 
 static int __init nomount_init(void)
 {
-    nm_dir_cachep   = KMEM_CACHE(nomount_dir_node, SLAB_HWCACHE_ALIGN);
-    nm_inode_cachep = KMEM_CACHE(nm_inode_info, SLAB_HWCACHE_ALIGN);
-    nm_iop_cachep   = KMEM_CACHE(nm_iop, SLAB_HWCACHE_ALIGN);
-    nm_fop_cachep   = KMEM_CACHE(nm_fop, SLAB_HWCACHE_ALIGN);
-
-    if (!nm_dir_cachep || !nm_inode_cachep || !nm_iop_cachep || !nm_fop_cachep) {
-        nm_err("Failed to allocate memory slab caches\n");
-        if (nm_dir_cachep) kmem_cache_destroy(nm_dir_cachep);
-        if (nm_inode_cachep) kmem_cache_destroy(nm_inode_cachep);
-        if (nm_iop_cachep) kmem_cache_destroy(nm_iop_cachep);
-        if (nm_fop_cachep) kmem_cache_destroy(nm_fop_cachep);
-        return -ENOMEM;
-    }
-
-	int ret = register_key_type(&nm_key_type);
+    int ret = register_key_type(&nm_key_type);
     if (ret) {
         nm_err("Failed to register key type (err: %d)\n", ret);
-        kmem_cache_destroy(nm_dir_cachep);
-        kmem_cache_destroy(nm_inode_cachep);
-        kmem_cache_destroy(nm_iop_cachep);
-        kmem_cache_destroy(nm_fop_cachep);
         return ret;
     }
 
@@ -1525,16 +1491,10 @@ static int __init nomount_init(void)
 static void __exit nomount_exit(void)
 {
     unregister_key_type(&nm_key_type);
-
     down_write(&nomount_rwsem);
     __nomount_clear_all(NM_CLEAR_UIDS | NM_CLEAR_RULES | NM_CLEAR_EXIT);
     up_write(&nomount_rwsem);
     rcu_barrier();
-    kmem_cache_destroy(nm_dir_cachep);
-    kmem_cache_destroy(nm_inode_cachep);
-    kmem_cache_destroy(nm_iop_cachep);
-    kmem_cache_destroy(nm_fop_cachep);
-
     nm_info("Unloaded successfully\n");
 }
 

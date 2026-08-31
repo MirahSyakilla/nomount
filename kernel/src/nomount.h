@@ -37,6 +37,7 @@ static struct rb_root_cached nomount_rules_tree = RB_ROOT_CACHED;
 static LIST_HEAD(nomount_sb_list);
 static DEFINE_IDR(nomount_uid_idr);
 static DECLARE_RWSEM(nomount_rwsem);
+static DEFINE_STATIC_KEY_FALSE(nomount_active_uids);
 DEFINE_STATIC_SRCU(nomount_srcu);
 
 /* * Helpers to dynamically calculate the memory address of the strings */
