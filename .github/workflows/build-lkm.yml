@@ -89,7 +89,7 @@ jobs:
         kmi: ${{ fromJSON(needs.select-kmis.outputs.kmi) }}
 
     container:
-      image: ghcr.io/ylarod/ddk:${{ matrix.kmi }}-20251104
+      image: ghcr.io/ylarod/ddk:${{ matrix.kmi }}
 
     env:
       MODULE_DIR: ${{ github.workspace }}/build/nomount
@@ -120,32 +120,19 @@ jobs:
       - name: Prepare module
         run: |
           set -euo pipefail
-
           mkdir -p "$MODULE_DIR"
           cp kernel/src/* "$MODULE_DIR/"
-
-          if ! grep -Fq 'MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);' "$MODULE_DIR/nomount.c"; then
-            printf '\n%s\n' 'MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);' >> "$MODULE_DIR/nomount.c"
-          fi
 
       - name: Build module
         run: |
           set -euo pipefail
-
-          CONFIG_NOMOUNT=m make \
-            -j"$(nproc)" \
-            -C "$KDIR" \
-            ARCH=arm64 \
-            CC=clang \
-            M="$MODULE_DIR" \
-            modules
+          CONFIG_NOMOUNT=m make -j"$(nproc)" -C "$KDIR" ARCH=arm64 CC=clang M="$MODULE_DIR" modules
 
       - name: Collect module
         run: |
           set -euo pipefail
-
           install -Dm644 "$MODULE_DIR/nomount.ko" "$ARTIFACT"
-          llvm-strip -d "$ARTIFACT"
+          llvm-strip --strip-debug -R .BTF "$ARTIFACT"
           ls -lh "$ARTIFACT"
 
       - name: Upload module
