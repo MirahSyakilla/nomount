@@ -1505,8 +1505,10 @@ MODULE_DESCRIPTION("NoMount Path Redirection VFS Subsystem");
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
 MODULE_IMPORT_NS("VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver");
+MODULE_IMPORT_NS("ANDROID_GKI_VFS_EXPORT_ONLY");
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
 MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
+MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
 #endif
 
 fs_initcall(nomount_init);
