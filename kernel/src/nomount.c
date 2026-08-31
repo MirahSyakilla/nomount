@@ -47,7 +47,7 @@ static __always_inline struct nomount_rule *nomount_bsearch_child(struct nomount
     return NULL;
 }
 
-static __always_inline bool __nomount_get_rule_info(struct nomount_dir_node *dir_node, const char *name, size_t len, u32 hash, struct nm_rule_info *rule_info, bool get_path)
+static bool __nomount_get_rule_info(struct nomount_dir_node *dir_node, const char *name, size_t len, u32 hash, struct nm_rule_info *rule_info, bool get_path)
 {
     struct nomount_child_array *arr;
     struct nomount_rule *rule;
@@ -77,7 +77,7 @@ static __always_inline bool __nomount_get_rule_info(struct nomount_dir_node *dir
     return found;
 }
 
-static __always_inline bool nomount_get_rule_info(struct nomount_dir_node *dir_node, const char *name, size_t len, u32 hash, struct nm_rule_info *rule_info, bool get_path)
+static bool nomount_get_rule_info(struct nomount_dir_node *dir_node, const char *name, size_t len, u32 hash, struct nm_rule_info *rule_info, bool get_path)
 {
     bool found;
     if (unlikely(!dir_node)) return false;
@@ -879,24 +879,19 @@ static void nomount_hijack_dentry_ops(struct dentry *dentry)
     spin_unlock(&dentry->d_lock);
 }
 
-static __always_inline void nomount_cure_sb_inodes(struct super_block *sb)
-{
-    struct inode *inode;
-    spin_lock(&sb->s_inode_list_lock);
-    list_for_each_entry(inode, &sb->s_inodes, i_sb_list) {
-        if (!inode->i_op && !inode->i_fop) continue;
-        nm_destroy_hijacked_inode(inode, true);
-    }
-    spin_unlock(&sb->s_inode_list_lock);
-}
-
 static void nomount_restore_superblocks(void)
 {
     struct nm_sop *nm_sop, *tmp;
+    struct inode *inode;
     list_for_each_entry_safe(nm_sop, tmp, &nomount_sb_list, list) {
         if (nm_sop->sb) {
             shrink_dcache_sb(nm_sop->sb);
-            nomount_cure_sb_inodes(nm_sop->sb);
+            spin_lock(&nm_sop->sb->s_inode_list_lock);
+            list_for_each_entry(inode, &nm_sop->sb->s_inodes, i_sb_list) {
+                if (!inode->i_op && !inode->i_fop) continue;
+                nm_destroy_hijacked_inode(inode, true);
+            }
+            spin_unlock(&nm_sop->sb->s_inode_list_lock);
             smp_store_release(&nm_sop->sb->s_op, nm_sop->orig_sop);
             if (nm_sop->fake_xattr) {
                 smp_store_release((const struct xattr_handler ***)&nm_sop->sb->s_xattr, nm_sop->orig_xattr);
@@ -911,7 +906,7 @@ static void nomount_restore_superblocks(void)
 
 /*** Module Management ***/
 
-static __always_inline struct nomount_dir_node *__nomount_alloc_dir_node(struct inode *inode) 
+static struct nomount_dir_node *__nomount_alloc_dir_node(struct inode *inode) 
 {
     struct nomount_dir_node *dir_node = kzalloc(sizeof(*dir_node), GFP_KERNEL);
     if (unlikely(!dir_node)) return NULL;
