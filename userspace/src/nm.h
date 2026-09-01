@@ -182,12 +182,19 @@ static noinline void print_uint(unsigned int n) {
 }
 
 /* path resolution */
-static noinline char* resolve_path(char *p, const char *cwd, const char *rel) {
+static noinline char* resolve_path(char *p, unsigned long capacity, const char *cwd, const char *rel) {
+    char *end = p + capacity;
     if (cwd && *rel != '/') {
-        while (*cwd) *p++ = *cwd++;
-        *p++ = '/'; 
+        while (*cwd) {
+            if (p == end) return 0;
+            *p++ = *cwd++;
+        }
+        if (p == end) return 0;
+        *p++ = '/';
     }
-    while ((*p++ = *rel++));
+    do {
+        if (p == end) return 0;
+    } while ((*p++ = *rel++));
     return p - 1; /* Points exactly to '\0' */
 }
 

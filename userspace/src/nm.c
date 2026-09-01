@@ -85,20 +85,24 @@ void c_main(long *sp) {
 
             for (int i = 0; i + step - 1 < p_count; i += step) {
                 char *v_resolved = workspace.virtual_path;
-                char *v_end = resolve_path(v_resolved, cwd, argv[i]);
+                char *v_end = resolve_path(v_resolved, sizeof(workspace.virtual_path), cwd, argv[i]);
+                if (!v_end) { exit_code = 3; continue; }
                 int v_len = v_end - v_resolved;
                 if (!v_len) { exit_code = 3; continue; }
 
                 int r_len = 0;
                 char *r_resolved = workspace.real_path;
                 if (action == ACTION_RULE_ADD && !is_whiteout) {
-                    char *r_end = resolve_path(r_resolved, cwd, argv[i+1]);
+                    char *r_end = resolve_path(r_resolved, sizeof(workspace.real_path), cwd, argv[i+1]);
+                    if (!r_end) { exit_code = 3; continue; }
                     r_len = r_end - r_resolved;
                     if (!r_len) { exit_code = 3; continue; }
                 }
 
                 int header_size = (target_cmd == NM_CMD_ADD_RULE) ? sizeof(struct nm_rule_hdr) : sizeof(struct nm_del_hdr);
-                if ((cursor - payload->buffer) + header_size + v_len + r_len > sizeof(payload->buffer)) {
+                int record_size = header_size + v_len + r_len;
+                if (record_size > sizeof(payload->buffer)) { exit_code = 3; continue; }
+                if ((cursor - payload->buffer) + record_size > sizeof(payload->buffer)) {
                     payload->data_size = cursor - payload->buffer;
                     exit_code |= (nm_send_payload(payload) < 0);
                     cursor = payload->buffer;
@@ -134,12 +138,13 @@ void c_main(long *sp) {
         case ACTION_UID_DEL: {
             if (p_count < 1) goto do_exit;
             payload->cmd = (action == ACTION_UID_ADD) ? NM_CMD_ADD_UID : NM_CMD_DEL_UID;
+            exit_code = 0;
             for (int i = 0; i < p_count; i++) {
                 unsigned int uid = 0;
                 const char *s = argv[i];
                 while (*s) uid = (uid << 3) + (uid << 1) + (*s++ - '0');
                 payload->target_uid = uid;
-                exit_code = (nm_send_payload(payload) < 0);
+                exit_code |= (nm_send_payload(payload) < 0);
             }
             break;
         }
