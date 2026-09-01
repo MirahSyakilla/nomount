@@ -319,7 +319,12 @@ static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *
 
 do_real_lookup:
     if (likely(nm_iop && nm_iop->orig_iop && nm_iop->orig_iop->lookup)) {
-        return nm_iop->orig_iop->lookup(dir, dentry, flags);
+        res = nm_iop->orig_iop->lookup(dir, dentry, flags);
+        if (unlikely(nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, NULL, false))) {
+            struct dentry *target = res ? res : dentry;
+            if (!IS_ERR(target)) d_drop(target);
+        }
+        return res;
     }
     return ERR_PTR(-EOPNOTSUPP);
 }
