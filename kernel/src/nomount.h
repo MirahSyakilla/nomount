@@ -86,9 +86,13 @@ struct nomount_dir_node {
     struct nomount_child_array __rcu *children;
     u64 bloom_mask;
     struct inode *v_inode;
-    unsigned long _tag_ptr;
-    struct nm_iop __rcu *iop;
-    struct nm_fop __rcu *fop;
+    union {
+        unsigned long _tag_ptr;
+        struct {
+            struct nm_iop __rcu *iop;
+            struct nm_fop __rcu *fop;
+        };
+    };
     seqcount_t seq;
 };
 
@@ -111,6 +115,23 @@ struct nomount_rule {
     struct nomount_dir_node *parent_dir;
     char paths[];
 };
+
+static __always_inline unsigned long nm_dir_tag(const struct nomount_dir_node *dir_node) {
+    return READ_ONCE(dir_node->_tag_ptr);
+}
+
+static __always_inline bool nm_dir_is_virtual(const struct nomount_dir_node *dir_node) {
+    return nm_dir_tag(dir_node) & 1UL;
+}
+
+static __always_inline struct nomount_rule *nm_dir_owner(const struct nomount_dir_node *dir_node) {
+    unsigned long tag = nm_dir_tag(dir_node);
+    return (tag & 1UL) ? (struct nomount_rule *)(tag & ~1UL) : NULL;
+}
+
+static __always_inline void nm_dir_set_owner(struct nomount_dir_node *dir_node, struct nomount_rule *owner) {
+    WRITE_ONCE(dir_node->_tag_ptr, (unsigned long)owner | 1UL);
+}
 
 struct nm_rule_info {
     union {

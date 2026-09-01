@@ -102,7 +102,7 @@ static inline void nm_destroy_virtual_inode(struct inode *inode)
 
     if (info->dir_node) {
         WRITE_ONCE(info->dir_node->v_inode, NULL);
-        if (READ_ONCE(info->dir_node->_tag_ptr) == 1UL)
+        if (nm_dir_tag(info->dir_node) == 1UL)
             call_rcu(&info->dir_node->rcu, nm_dir_rcu_free);
     }
 
@@ -126,7 +126,7 @@ static inline void nm_destroy_hijacked_inode(struct inode *inode, bool restore)
         if (restore) smp_store_release(&inode->i_fop, nm_fop->orig_fop);
         kfree_rcu(nm_fop, rcu);
     }
-    if (dir_node && !(dir_node->_tag_ptr & 1UL)) {
+    if (dir_node && !nm_dir_is_virtual(dir_node)) {
         smp_mb();
         if (!rcu_access_pointer(dir_node->children) &&
              cmpxchg(&dir_node->v_inode, NULL, (struct inode *)-1L) == NULL)
@@ -1065,7 +1065,7 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
         write_seqcount_end(&dir_node->seq);
         synchronize_srcu(&nomount_srcu);
         kfree_rcu(old_arr, rcu);
-        if (!(dir_node->_tag_ptr & 1UL) && !rcu_access_pointer(dir_node->iop) &&
+        if (!nm_dir_is_virtual(dir_node) && !rcu_access_pointer(dir_node->iop) &&
              !rcu_access_pointer(dir_node->fop) && cmpxchg(&dir_node->v_inode, NULL, (struct inode *)-1L) == NULL)
             call_rcu(&dir_node->rcu, nm_dir_rcu_free);
         return;
@@ -1114,7 +1114,7 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
             if ((err = __nomount_inject_child_locked(dir_node, current_rule, child_name, child_len))) {
                 if (!ex->this_dir) kfree(dir_node);
             } else {
-                dir_node->_tag_ptr = (unsigned long)ex | 1UL;
+                nm_dir_set_owner(dir_node, ex);
                 ex->this_dir = dir_node;
             }
             break;
@@ -1163,7 +1163,7 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
             kfree(dir_node); kfree(irule);
             break;
         }
-        dir_node->_tag_ptr = (unsigned long)irule | 1UL;
+        nm_dir_set_owner(dir_node, irule);
         irule->this_dir = dir_node;
         hlist_add_head(&irule->vpath_node, &pending_list);
         current_rule = irule;
@@ -1182,7 +1182,7 @@ static void nm_detach_dir_node(struct nomount_dir_node *dir_node)
 {
     struct nm_iop *iop;
     struct nm_fop *fop;
-    if (!dir_node || (dir_node->_tag_ptr & 1UL)) return;
+    if (!dir_node || nm_dir_is_virtual(dir_node)) return;
 
     rcu_read_lock();
     if ((iop = rcu_dereference(dir_node->iop))) WRITE_ONCE(iop->dir_node, NULL);
@@ -1199,7 +1199,7 @@ static void nomount_prune_empty_virtual_dirs(struct nomount_dir_node *dir_node, 
         if ((arr = rcu_dereference_protected(dir_node->children, lockdep_is_held(&nomount_rwsem))) && arr->count)
             break;
 
-        if (!(owner = (dir_node->_tag_ptr & 1UL) ? (struct nomount_rule *)(dir_node->_tag_ptr & ~1UL) : NULL))
+        if (!(owner = nm_dir_owner(dir_node)))
             break;
 
         if (!(owner->flags & NM_FLAG_VIRTUAL_DIR)) {
@@ -1207,7 +1207,7 @@ static void nomount_prune_empty_virtual_dirs(struct nomount_dir_node *dir_node, 
                 nm_detach_dir_node(dir_node);
                 call_rcu(&dir_node->rcu, nm_dir_rcu_free);
             } else {
-                WRITE_ONCE(dir_node->_tag_ptr, 1UL); 
+                nm_dir_set_owner(dir_node, NULL);
             }
             break;
         }
@@ -1274,7 +1274,7 @@ static void nm_free_rule(struct nomount_rule *rule)
                 nm_detach_dir_node(rule->this_dir);
                 call_rcu(&rule->this_dir->rcu, nm_dir_rcu_free);
             } else {
-                WRITE_ONCE(rule->this_dir->_tag_ptr, 1UL);
+                nm_dir_set_owner(rule->this_dir, NULL);
             }
         }
     } else if (rule->r_path.dentry) path_put(&rule->r_path);
@@ -1305,7 +1305,7 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
         if ((existing->flags & NM_FLAG_VIRTUAL_DIR) && existing->this_dir && (rule->flags & NM_FLAG_VIRTUAL_DIR)) {
             if (rule->this_dir) call_rcu(&rule->this_dir->rcu, nm_dir_rcu_free);
             rule->this_dir = existing->this_dir;
-            if (rule->this_dir->_tag_ptr & 1UL) rule->this_dir->_tag_ptr = (unsigned long)rule | 1UL;
+            if (nm_dir_is_virtual(rule->this_dir)) nm_dir_set_owner(rule->this_dir, rule);
             existing->this_dir = NULL;
         }
         nm_detach_rule_locked(existing, r_victims, false);
