@@ -25,12 +25,12 @@ static __always_inline struct nomount_rule *nomount_bsearch_child(struct nomount
     u32 *hashes = arr->hashes;
     struct nomount_rule **rules = nm_get_child_rules(arr);
 
-    if (unlikely(n <= 0)) return NULL;
     while (n > 0) {
         int step = n >> 1, m = l + step, less = (hashes[m] < hash), mask = -less;
         l += (step + 1) & mask;
         n = step + ((n - (step << 1) - 1) & mask);
     }
+    if (index) *index = l;
     while (l < arr->count && hashes[l] == hash) {
         struct nomount_rule *rule = READ_ONCE(rules[l]);
         if (likely(rule && rule->child_len == len) && !memcmp(nm_get_child_name(rule), name, len)) {
@@ -992,9 +992,6 @@ static int __nomount_inject_child_locked(struct nomount_dir_node *dir_node, stru
     old_count = old_arr ? old_arr->count : 0;
     capacity = old_arr ? old_arr->capacity : 0;
     old_rules = old_arr ? nm_get_child_rules(old_arr) : NULL;
-
-    if (old_arr)
-        while (pos < old_count && old_arr->hashes[pos] < target_hash) pos++;
 
     if (old_arr && old_count < capacity) {
         rule->child_len = name_len;
