@@ -1296,7 +1296,7 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
         return PTR_ERR(rule);
 
     down_write(&nomount_rwsem);
-    if ((existing = nm_tree_search_exact(rule->v_hash, v_len, nm_get_vpath(rule), target_uid))) {
+    if ((existing = nm_tree_search_exact(rule->v_hash, rule->v_len, nm_get_vpath(rule), target_uid))) {
         if ((existing->flags & NM_FLAG_VIRTUAL_DIR) && existing->this_dir && (rule->flags & NM_FLAG_VIRTUAL_DIR)) {
             if (rule->this_dir) call_rcu(&rule->this_dir->rcu, nm_dir_rcu_free);
             rule->this_dir = existing->this_dir;
@@ -1322,8 +1322,9 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
     return 0;
 }
 
-static void __nomount_del_rule(const char *v_path, size_t v_len, unsigned int target_uid, struct hlist_head *r_victims)
+static void __nomount_del_rule(const char *v_path, u16 v_len, unsigned int target_uid, struct hlist_head *r_victims)
 {
+    while (v_len > 1 && v_path[v_len - 1] == '/') v_len--;
     u32 hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, v_path, v_len);
     struct nomount_rule *rule = nm_tree_search_exact(hash, v_len, v_path, target_uid);
     if (rule) nm_detach_rule_locked(rule, r_victims, true);
