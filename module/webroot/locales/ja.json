@@ -55,5 +55,6 @@
   "status_version": "バージョン：{{version}}",
   "add_exclusion": "除外設定を追加",
   "mode_lkm": "LKM",
-  "mode_builtin": "Built-in"
+  "mode_builtin": "Built-in",
+  "module_version_label": "Module version"
 }

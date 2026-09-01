@@ -55,5 +55,6 @@
   "status_version": "Version: {{version}}",
   "add_exclusion": "Add exclusion",
   "mode_lkm": "LKM",
-  "mode_builtin": "Built-in"
+  "mode_builtin": "Built-in",
+  "module_version_label": "Module version"
 }

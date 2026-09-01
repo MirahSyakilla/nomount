@@ -55,5 +55,6 @@
   "status_version": "版本：{{version}}",
   "add_exclusion": "添加排除项",
   "mode_lkm": "LKM",
-  "mode_builtin": "Built-in"
+  "mode_builtin": "Built-in",
+  "module_version_label": "Module version"
 }
