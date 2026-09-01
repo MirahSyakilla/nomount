@@ -45,31 +45,37 @@ static __always_inline struct nomount_rule *nomount_bsearch_child(struct nomount
 static bool __nomount_get_rule_info(struct nomount_dir_node *dir_node, const char *name, size_t len, u32 hash, struct nm_rule_info *rule_info, bool get_path)
 {
     struct nomount_child_array *arr;
-    struct nomount_rule *rule;
+    struct nomount_rule *rule, *found_rule;
     unsigned int seq;
-    bool found = false;
+    uid_t fsuid = current_uid().val;
 
     do {
+        found_rule = NULL;
         seq = read_seqcount_begin(&dir_node->seq);
         arr = rcu_dereference(dir_node->children);
         if (likely(arr)) {
             rule = nomount_bsearch_child(arr, name, len, hash, NULL);
-            if (rule && (rule->target_uid == 0 || rule->target_uid == current_uid().val)) {
-                if (rule_info) {
-                    rule_info->flags = rule->flags;
-                    rule_info->v_ino = rule->v_ino;
-                    if (rule->flags & NM_FLAG_VIRTUAL_DIR) rule_info->this_dir = rule->this_dir;
-                    else (get_path && rule->r_path.dentry) ? (rule_info->r_path = rule->r_path) : (rule_info->r_path = (struct path){ .dentry = NULL, .mnt = NULL });
-                }
-                found = true;
-            }
+            if (rule && (!rule->target_uid || rule->target_uid == fsuid)) found_rule = rule;
         }
     } while (read_seqcount_retry(&dir_node->seq, seq));
 
-    if (found && rule_info && get_path && rule_info->r_path.dentry) 
+    if (!found_rule)
+        return false;
+
+    if (rule_info) {
+        rule_info->flags = found_rule->flags;
+        rule_info->v_ino = found_rule->v_ino;
+        if (found_rule->flags & NM_FLAG_VIRTUAL_DIR) {
+            rule_info->this_dir = found_rule->this_dir;
+        } else {
+            rule_info->r_path = (get_path && found_rule->r_path.dentry) ? found_rule->r_path : (struct path){ .dentry = NULL, .mnt = NULL };
+        }
+    }
+
+    if (rule_info && get_path && !(found_rule->flags & NM_FLAG_VIRTUAL_DIR) && rule_info->r_path.dentry) 
         path_get(&rule_info->r_path);
 
-    return found;
+    return true;
 }
 
 static bool nomount_get_rule_info(struct nomount_dir_node *dir_node, const char *name, size_t len, u32 hash, struct nm_rule_info *rule_info, bool get_path)
@@ -146,27 +152,20 @@ static NM_ACTOR_RET nomount_actor_proxy(struct dir_context *ctx, const char *nam
         if (READ_ONCE(proxy->dir_node->bloom_mask) & (1ULL << (hash & 63))) {
             unsigned int seq;
             uid_t fsuid = current_uid().val;
+            bool hidden = false;
             rcu_read_lock();
             do {
                 struct nomount_child_array *arr;
                 struct nomount_rule *rule;
-                bool match = false;
                 seq = read_seqcount_begin(&proxy->dir_node->seq);
                 arr = rcu_dereference(proxy->dir_node->children);
-                if (likely(arr) && (rule = nomount_bsearch_child(arr, name, namelen, hash, NULL)) && (!rule->target_uid || rule->target_uid == fsuid))
-                    match = true;
-
-                if (read_seqcount_retry(&proxy->dir_node->seq, seq))
-                    continue;
-
-                if (match) {
-                    rcu_read_unlock();
-                    proxy->ctx.pos = offset;
-                    return NM_ACTOR_CONTINUE;
-                }
-                break;
-            } while (1);
+                hidden = likely(arr) && (rule = nomount_bsearch_child(arr, name, namelen, hash, NULL)) && (!rule->target_uid || rule->target_uid == fsuid);
+            } while (read_seqcount_retry(&proxy->dir_node->seq, seq));
             rcu_read_unlock();
+            if (hidden) {
+                proxy->ctx.pos = offset;
+                return NM_ACTOR_CONTINUE;
+            }
         }
     }
 
