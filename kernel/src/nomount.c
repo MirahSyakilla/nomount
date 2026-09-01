@@ -90,7 +90,7 @@ static bool nomount_get_rule_info(struct nomount_dir_node *dir_node, const char 
 static void nm_dir_rcu_free(struct rcu_head *head)
 {
     struct nomount_dir_node *dir = container_of(head, struct nomount_dir_node, rcu);
-    kfree(dir->children); kfree(dir);
+    kfree(rcu_dereference_raw(dir->children)); kfree(dir);
 }
 
 static inline void nm_destroy_virtual_inode(struct inode *inode)
@@ -305,7 +305,7 @@ static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *
     struct nm_iop *nm_iop = __get_nm(smp_load_acquire(&dir->i_op), struct nm_iop, fake_iop, lookup, nomount_hijacked_lookup);
     struct nomount_dir_node *dir_node = nm_iop ? READ_ONCE(nm_iop->dir_node) : NULL;
     struct dentry *res;
-    u32 hash;
+    u32 hash = 0;
 
     if (unlikely(!nm_iop || !dir_node))
         goto do_real_lookup;
@@ -965,7 +965,8 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
     target_hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name, name_len);
     rule->child_len = name_len;
     rule->parent_dir = dir_node;
-    if ((old_arr = dir_node->children) && nomount_bsearch_child(old_arr, name, name_len, target_hash, &pos)) {
+    old_arr = rcu_dereference_protected(dir_node->children, lockdep_is_held(&nomount_rwsem));
+    if (old_arr && nomount_bsearch_child(old_arr, name, name_len, target_hash, &pos)) {
         write_seqcount_begin(&dir_node->seq);
         WRITE_ONCE(nm_get_child_rules(old_arr)[pos], rule);
         write_seqcount_end(&dir_node->seq);
@@ -978,7 +979,7 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
     if (old_arr)
         while (pos < old_count && old_arr->hashes[pos] < target_hash) pos++;
 
-    if (old_count < capacity) {
+    if (old_arr && old_count < capacity) {
         write_seqcount_begin(&dir_node->seq);
         if (pos < old_count) {
             for (int i = old_count; i > pos; i--) {
@@ -1028,7 +1029,7 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
     int old_count, target_idx = -1;
     u64 mask = 0;
 
-    if (unlikely(!dir_node || !(old_arr = dir_node->children))) return;
+    if (unlikely(!dir_node || !(old_arr = rcu_dereference_protected(dir_node->children, lockdep_is_held(&nomount_rwsem))))) return;
     rules = nm_get_child_rules(old_arr);
 
     for (int i = 0; i < (old_count = old_arr->count); i++) {
@@ -1167,10 +1168,16 @@ static void nm_detach_dir_node(struct nomount_dir_node *dir_node)
 static void nomount_prune_empty_virtual_dirs(struct nomount_dir_node *dir_node, struct hlist_head *victims)
 {
     struct nomount_rule *owner;
-    while (dir_node && (!dir_node->children || !dir_node->children->count) &&
-           (owner = (dir_node->_tag_ptr & 1UL) ? (struct nomount_rule *)(dir_node->_tag_ptr & ~1UL) : NULL)) {
+    struct nomount_child_array *arr;
 
-       if (!(owner->flags & NM_FLAG_VIRTUAL_DIR)) {
+    while (dir_node) {
+        if ((arr = rcu_dereference_protected(dir_node->children, lockdep_is_held(&nomount_rwsem))) && arr->count)
+            break;
+
+        if (!(owner = (dir_node->_tag_ptr & 1UL) ? (struct nomount_rule *)(dir_node->_tag_ptr & ~1UL) : NULL))
+            break;
+
+        if (!(owner->flags & NM_FLAG_VIRTUAL_DIR)) {
             if (cmpxchg(&dir_node->v_inode, NULL, (struct inode *)-1L) == NULL) {
                 nm_detach_dir_node(dir_node);
                 call_rcu(&dir_node->rcu, nm_dir_rcu_free);
