@@ -34,8 +34,7 @@ metamodule_hot_install() {
 	cat "$MODDIR_INTERNAL/module.prop" > "$MODPATH_INTERNAL/module.prop"
 
 	( sleep 3 ; 
-		rm -rf "$MODDIR_INTERNAL/update" ; 
-		rm -rf "$MODPATH_INTERNAL"
+		rm -rf "$MODDIR_INTERNAL/update" "$MODPATH_INTERNAL"
 	) & # fork in background
 
 	ui_print "- Module hot install requested!"

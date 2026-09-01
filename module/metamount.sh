@@ -50,11 +50,7 @@ if "$LOADER" version > /dev/null 2>&1; then
     echo "[INFO] Built-in Kernel support detected." >> "$LOG_FILE"
 else
     echo "[INFO] Built-in not found. Attempting to load LKM..." >> "$LOG_FILE"
-    if [ -f "$MODDIR/lkm/nomount.ko" ]; then
-        load_ko "$MODDIR/lkm/nomount.ko" >> "$LOG_FILE" 2>&1
-    fi
-
-    if ! "$LOADER" version > /dev/null 2>&1; then
+    if [ ! -f "$MODDIR/lkm/nomount.ko" ] || ! load_ko "$MODDIR/lkm/nomount.ko" >> "$LOG_FILE" 2>&1; then
         echo "[FATAL] NoMount Internal API is missing/unresponsive." >> "$LOG_FILE"
         touch "$MODDIR/disable"
         sed -i "s|^description=.*|description=[❌ ERROR: Kernel not patched or module failed to load] \\\\n$BASE_DESC|" "$PROP_FILE"
@@ -81,7 +77,7 @@ for mod_path in "$MODULES_DIR"/*; do
             find -L "$mod_path/$partition" \( -type d -o -type c -o -name ".replace" \) -exec sh -c '
                 for f do
                     v="${f#'"$mod_path"'}"; [ "${v#/system/odm/}" != "$v" ] && v="/odm/${v#/system/odm/}"
-                    if [ -d "$f" ]; then getfattr -n trusted.overlay.opaque "$f" 2>/dev/null | grep -q "=\"y\"" && printf "%s\0" "$v"
+                    if [ -d "$f" ]; then case "$(getfattr -n trusted.overlay.opaque "$f" 2>/dev/null)" in *"=\"y\""*) printf "%s\0" "$v";; esac
                     elif [ "${f##*/}" = ".replace" ]; then printf "%s\0" "${v%/.replace}"
                     else printf "%s\0" "$v"; fi
                 done

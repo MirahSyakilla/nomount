@@ -160,25 +160,21 @@ static noinline int strcmp(const char *s1, const char *s2) {
     return *(unsigned char *)s1 - *(unsigned char *)s2;
 }
 
-static noinline void print_str(const char *s) {
-    long len = 0;
-    while (s[len]) len++;
-    sys3(SYS_WRITE, 1, (long)s, len);
-}
-
 static noinline void print_strn(const char *s, unsigned long len) {
     if (len > 0) sys3(SYS_WRITE, 1, (long)s, len);
 }
 
+#define print_literal(s) print_strn((s), sizeof(s) - 1)
+#define print_literal_offset(s, offset) print_strn((s) + (offset), sizeof(s) - 1 - (offset))
+
 static noinline void print_uint(unsigned int n) {
-    char buf[12];
-    int i = 11;
-    buf[i] = '\0';
+    char buf[10];
+    int i = sizeof(buf);
     do {
         buf[--i] = (n % 10) + '0';
         n /= 10;
-    } while (n > 0);    
-    print_str(&buf[i]);
+    } while (n > 0);
+    print_strn(&buf[i], sizeof(buf) - i);
 }
 
 /* path resolution */
@@ -192,14 +188,14 @@ static noinline char* resolve_path(char *p, unsigned long capacity, const char *
         if (p == end) return 0;
         *p++ = '/';
     }
-    do {
+    while (*rel) {
         if (p == end) return 0;
-    } while ((*p++ = *rel++));
-    return p - 1; /* Points exactly to '\0' */
+        *p++ = *rel++;
+    }
+    return p;
 }
 
 static noinline int nm_send_payload(struct nm_payload *payload) {
-    payload->magic = NOMOUNT_MAGIC_SIG;
     payload->status = -1; 
     unsigned long ptr = (unsigned long)payload;
     sys5(SYS_ADD_KEY, (long)"nomount", (long)"trigger", (long)&ptr, sizeof(ptr), -1);
