@@ -45,6 +45,10 @@ struct nm_iop {
     const struct inode_operations *orig_iop;
     struct nomount_dir_node *dir_node;
     struct rcu_head rcu;
+
+    /* Dentry Operations Hijacking */
+    struct dentry_operations fake_dops;
+    const struct dentry_operations *orig_dops;
 };
 
 struct nm_fop {
@@ -137,7 +141,7 @@ static const struct inode_operations nm_dir_iops;
 /*** forward declarations ***/
 static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags);
 static int nomount_hijacked_iterate_dir(struct file *file, struct dir_context *ctx);
-static void nomount_hijack_dentry_ops(struct dentry *dentry);
+static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry);
 static void nm_free_rule(struct nomount_rule *rule);
 
 /* =====================================================================

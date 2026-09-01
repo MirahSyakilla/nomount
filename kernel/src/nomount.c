@@ -262,7 +262,7 @@ static struct dentry *nomount_resolve_rule_dentry(struct inode *dir, struct dent
     }
 
     if (rule_info.flags & NM_FLAG_WHITEOUT) {
-        nomount_hijack_dentry_ops(dentry);
+        nomount_hijack_dentry_ops(dir, dentry);
         d_add(dentry, NULL); res = NULL;
         goto unlock_out;
     }
@@ -280,7 +280,7 @@ static struct dentry *nomount_resolve_rule_dentry(struct inode *dir, struct dent
 
         rcu_read_unlock();
         if (!IS_ERR((res = d_splice_alias(splice_inode, dentry))))
-            nomount_hijack_dentry_ops(res ? res : dentry);
+            nomount_hijack_dentry_ops(dir, res ? res : dentry);
             
         goto cleanup_out;
     }
@@ -650,7 +650,7 @@ static struct dentry *nm_dir_lookup(struct inode *dir, struct dentry *dentry, un
     return ERR_PTR(-EOPNOTSUPP);
 
 negative_dentry:
-    nomount_hijack_dentry_ops(dentry);
+    nomount_hijack_dentry_ops(dir, dentry);
     d_add(dentry, NULL);
     return NULL;
 }
@@ -689,10 +689,11 @@ static int nm_d_revalidate(struct inode *parent_inode, const struct qstr *name, 
 static int nm_d_revalidate(struct dentry *dentry, unsigned int flags)
 #endif
 {
-    struct nomount_dir_node *parent_dir;
+    struct nomount_dir_node *parent_dir = NULL;
     struct nm_rule_info rule_info;
     struct inode *inode;
-    bool injected;
+    struct nm_iop *iop = NULL;
+    bool injected, has_rule = false;
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 13, 0)
     struct inode *parent_inode = d_inode(READ_ONCE(dentry->d_parent));
@@ -703,7 +704,7 @@ static int nm_d_revalidate(struct dentry *dentry, unsigned int flags)
     if (parent_inode->i_op == &nm_dir_iops) {
         parent_dir = ((struct nm_inode_info *)parent_inode->i_private)->dir_node;
     } else {
-        struct nm_iop *iop = __get_nm(smp_load_acquire(&parent_inode->i_op), struct nm_iop, fake_iop, lookup, nomount_hijacked_lookup);
+        iop = __get_nm(smp_load_acquire(&parent_inode->i_op), struct nm_iop, fake_iop, lookup, nomount_hijacked_lookup);
         parent_dir = iop ? iop->dir_node : NULL;
     }
 
@@ -712,20 +713,31 @@ static int nm_d_revalidate(struct dentry *dentry, unsigned int flags)
 
     if (parent_dir) {
         u32 hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name->name, name->len);
-        if (nomount_get_rule_info(parent_dir, name->name, name->len, hash, &rule_info, false) && 
-            !nomount_is_uid_blocked(current_uid().val)) {
-            if (rule_info.flags & NM_FLAG_WHITEOUT) return !inode;
-            return injected;
-        }
+        has_rule = nomount_get_rule_info(parent_dir, name->name, name->len, hash, &rule_info, false);
     }
 
-    if (!inode) {
-        if (flags & LOOKUP_RCU) return -ECHILD;
-        d_drop(dentry);
-        return 0;
+    if (has_rule && !nomount_is_uid_blocked(current_uid().val)) {
+        if (rule_info.flags & NM_FLAG_WHITEOUT) return !inode;
+        if (injected) return 1;
+        goto drop_it;
     }
 
-    return !injected;
+    if (injected || (!inode && has_rule))
+        goto drop_it;
+
+    if (iop && iop->orig_dops && iop->orig_dops->d_revalidate) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
+        return iop->orig_dops->d_revalidate(parent_inode, name, dentry, flags);
+#else
+        return iop->orig_dops->d_revalidate(dentry, flags);
+#endif
+    }
+    return 1;
+
+drop_it:
+    if (flags & LOOKUP_RCU) return -ECHILD;
+    d_drop(dentry);
+    return 0;
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0)
@@ -870,17 +882,39 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
     if (nm_iop || nm_fop) nm_debug("Successfully hijacked VFS ops for parent dir (ino: %lu)\n", inode->i_ino);
 }
 
-static void nomount_hijack_dentry_ops(struct dentry *dentry)
+static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry)
 {
+    #define NM_DOP_INITIALIZING ((const struct dentry_operations *)1L)
     static const struct dentry_operations nm_dops = { .d_revalidate = nm_d_revalidate };
-    if (!dentry) return;
+    const struct dentry_operations *orig, *current_orig;
+    struct nm_iop *iop;
+
+    if (!dentry || !dir) return;
+    iop = __get_nm(smp_load_acquire(&dir->i_op), struct nm_iop, fake_iop, lookup, nomount_hijacked_lookup);
+    if ((orig = READ_ONCE(dentry->d_op)) == &nm_dops || (iop && orig == &iop->fake_dops)) return;
+
     spin_lock(&dentry->d_lock);
-    if (dentry->d_op != &nm_dops) {
+    if ((orig = dentry->d_op) == &nm_dops || (iop && orig == &iop->fake_dops)) { spin_unlock(&dentry->d_lock); return; }
+    if (orig && iop) {
+        if (unlikely((current_orig = smp_load_acquire(&iop->orig_dops)) != orig)) {
+            if (current_orig == NULL) {
+                if (cmpxchg(&iop->orig_dops, NULL, NM_DOP_INITIALIZING) == NULL) {
+                    iop->fake_dops = *orig;
+                    iop->fake_dops.d_revalidate = nm_d_revalidate;
+                    smp_store_release(&iop->orig_dops, orig);
+                } else {
+                    while (smp_load_acquire(&iop->orig_dops) == NM_DOP_INITIALIZING) cpu_relax();
+                }
+            } else if (current_orig == NM_DOP_INITIALIZING) {
+                while (smp_load_acquire(&iop->orig_dops) == NM_DOP_INITIALIZING) cpu_relax();
+            }
+        }
+        dentry->d_op = &iop->fake_dops;
+    } else {
         dentry->d_op = &nm_dops;
-        dentry->d_flags &= ~(DCACHE_OP_WEAK_REVALIDATE | DCACHE_OP_DELETE | DCACHE_OP_PRUNE
-                             | DCACHE_OP_COMPARE | DCACHE_OP_HASH | DCACHE_OP_REAL);
-        dentry->d_flags |= (DCACHE_OP_REVALIDATE | DCACHE_DONTCACHE);
     }
+
+    dentry->d_flags |= (DCACHE_OP_REVALIDATE | DCACHE_DONTCACHE);
     spin_unlock(&dentry->d_lock);
 }
 
