@@ -582,6 +582,7 @@ static int nm_setattr(IDMAP_ARG struct dentry *dentry, struct iattr *attr)
     inode_unlock(d_backing_inode(info->r_path.dentry));
 
     if (likely(!err)) {
+        if (attr->ia_valid & ATTR_SIZE) i_size_write(v_inode, i_size_read(d_backing_inode(info->r_path.dentry)));
         if (attr->ia_valid & ATTR_MODE) v_inode->i_mode = d_backing_inode(info->r_path.dentry)->i_mode;
         if (attr->ia_valid & ATTR_UID)  v_inode->i_uid = d_backing_inode(info->r_path.dentry)->i_uid;
         if (attr->ia_valid & ATTR_GID)  v_inode->i_gid = d_backing_inode(info->r_path.dentry)->i_gid;
