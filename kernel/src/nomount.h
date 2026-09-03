@@ -141,6 +141,7 @@ static const struct inode_operations nm_dir_iops;
 /*** forward declarations ***/
 static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags);
 static int nomount_hijacked_iterate_dir(struct file *file, struct dir_context *ctx);
+static void nomount_hijacked_destroy_inode(struct inode *inode);
 static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry);
 static void nm_free_rule(struct nomount_rule *rule);
 
@@ -331,6 +332,29 @@ static inline int nm_call_iterate(struct file *file, struct dir_context *ctx, co
 static inline struct dentry *nm_hash_and_lookup(struct dentry *dir, struct qstr *n) {
     n->hash = full_name_hash(dir, n->name, n->len);
     return (unlikely(dir->d_flags & DCACHE_OP_HASH) && dir->d_op->d_hash(dir, n) < 0) ? NULL : d_lookup(dir, n);
+}
+
+static inline struct nm_iop *nm_get_nm_iop(const struct inode_operations *iop) {
+    if (likely(iop) && iop->lookup == nomount_hijacked_lookup)
+        return container_of(iop, struct nm_iop, fake_iop);
+    return NULL;
+}
+
+static inline struct nm_fop *nm_get_nm_fop(const struct file_operations *fop) {
+    if (unlikely(!fop)) return NULL;
+    if (fop->iterate_shared == nomount_hijacked_iterate_dir)
+        return container_of(fop, struct nm_fop, fake_fop);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
+    if (fop->iterate == nomount_hijacked_iterate_dir)
+        return container_of(fop, struct nm_fop, fake_fop);
+#endif
+    return NULL;
+}
+
+static inline struct nm_sop *nm_get_nm_sop(const struct super_operations *sop) {
+    if (likely(sop) && sop->destroy_inode == nomount_hijacked_destroy_inode)
+        return container_of(sop, struct nm_sop, fake_sop);
+    return NULL;
 }
 
 #define NM_DOP_INITIALIZING ((const struct dentry_operations *)1L)
