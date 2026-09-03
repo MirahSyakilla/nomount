@@ -155,14 +155,22 @@ static NM_ACTOR_RET nomount_actor_proxy(struct dir_context *ctx, const char *nam
             do {
                 struct nomount_child_array *arr;
                 struct nomount_rule *rule;
+                bool match = false;
                 seq = read_seqcount_begin(&proxy->dir_node->seq);
                 arr = rcu_dereference(proxy->dir_node->children);
-                if (likely(arr) && (rule = nomount_bsearch_child(arr, name, namelen, hash, NULL)) && (!rule->target_uid || rule->target_uid == fsuid)) {
+                if (likely(arr) && (rule = nomount_bsearch_child(arr, name, namelen, hash, NULL)) && (!rule->target_uid || rule->target_uid == fsuid))
+                    match = true;
+
+                if (read_seqcount_retry(&proxy->dir_node->seq, seq))
+                    continue;
+
+                if (match) {
                     rcu_read_unlock();
                     proxy->ctx.pos = offset;
                     return NM_ACTOR_CONTINUE;
                 }
-            } while (read_seqcount_retry(&proxy->dir_node->seq, seq));
+                break;
+            } while (1);
             rcu_read_unlock();
         }
     }
