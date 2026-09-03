@@ -194,7 +194,7 @@ static inline void nomount_emit_virtual_children(struct dir_context *ctx, struct
 	array = srcu_dereference(dir_node->children, &nomount_srcu);
 	if (array) {
 		struct nomount_rule **rules = nm_get_child_rules(array);
-		for (id = nm_unpack_pos(ctx->pos); id < array->count; id++) {
+		for (id = nm_unpack_pos(ctx->pos); id < READ_ONCE(array->count); id++) {
 			struct nomount_rule *rule;
 			ctx->pos = nm_pack_pos(id);
 			if ((rule = READ_ONCE(rules[id])) && (rule->target_uid == 0 || rule->target_uid == current_uid().val)) {
@@ -1067,6 +1067,9 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
             WRITE_ONCE(rules[i], READ_ONCE(rules[i + 1]));
         }
     }
+
+    WRITE_ONCE(old_arr->hashes[old_count - 1], 0);
+    WRITE_ONCE(rules[old_count - 1], NULL);
     old_arr->count--;
 
     for (int i = 0; i < old_arr->count; i++) mask |= (1ULL << (old_arr->hashes[i] & 63));
