@@ -234,7 +234,7 @@ static void nomount_init_prealloc_inode(struct inode *inode, struct nm_inode_inf
         inode->i_fop = &nm_dir_fops;
 
     if (r_inode) nm_sync_inode_times(inode, r_inode), inode->i_mapping = r_inode->i_mapping;
-    inode->i_flags |=  S_NOATIME | S_NOCMTIME | S_NOSEC;
+    inode->i_flags |= S_PRIVATE | S_NOATIME | S_NOCMTIME | S_NOSEC;
     if (!S_ISLNK(inode->i_mode)) inode->i_opflags |= IOP_NOFOLLOW;
 }
 
@@ -479,6 +479,20 @@ static ssize_t nm_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
     return ret;
 }
+
+static int nm_mmap(struct file *file, struct vm_area_struct *vma)
+{
+    int ret = generic_file_mmap(file, vma);
+    return ret ? ret : (file_inode(file)->i_flags &= ~S_PRIVATE, 0);
+}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0)
+static int nm_mmap_prepare(struct vm_area_desc *desc)
+{
+    int ret = generic_file_mmap_prepare(desc);
+    return ret ? ret : (file_inode(desc->file)->i_flags &= ~S_PRIVATE, 0);
+}
+#endif
 
 static long nm_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
@@ -753,7 +767,7 @@ static const struct file_operations nm_file_fops_mmap_prepare = {
     .release = nm_release,
     .read_iter = nm_read_iter,
     .write_iter = nm_write_iter,
-    .mmap_prepare = generic_file_mmap_prepare,
+    .mmap_prepare = nm_mmap_prepare,
     .unlocked_ioctl = nm_unlocked_ioctl,
 #ifdef CONFIG_COMPAT
     .compat_ioctl = nm_compat_ioctl,
@@ -771,7 +785,7 @@ static const struct file_operations nm_file_fops = {
     .release = nm_release,
     .read_iter = nm_read_iter,
     .write_iter = nm_write_iter,
-    .mmap = generic_file_mmap,
+    .mmap = nm_mmap,
     .unlocked_ioctl = nm_unlocked_ioctl,
 #ifdef CONFIG_COMPAT
     .compat_ioctl = nm_compat_ioctl,
