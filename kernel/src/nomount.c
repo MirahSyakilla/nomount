@@ -535,10 +535,15 @@ static int nm_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 static ssize_t nm_listxattr(struct dentry *dentry, char *buffer, size_t size)
 {
     struct nm_inode_info *info = d_backing_inode(dentry)->i_private;
-    if (unlikely(!info || (info->flags & NM_FLAG_VIRTUAL_DIR) || !d_backing_inode(info->r_path.dentry)->i_op->listxattr))
-        return -EOPNOTSUPP;
+    struct inode *r_inode;
 
-    return d_backing_inode(info->r_path.dentry)->i_op->listxattr(info->r_path.dentry, buffer, size);
+    if (unlikely(!info)) return -EIO;
+    if (info->flags & NM_FLAG_VIRTUAL_DIR) return 0;
+    if (!info->r_path.dentry) return -EOPNOTSUPP;
+
+    r_inode = d_backing_inode(info->r_path.dentry);
+    if (!r_inode || !r_inode->i_op || !r_inode->i_op->listxattr) return 0;
+    return r_inode->i_op->listxattr(info->r_path.dentry, buffer, size);
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
