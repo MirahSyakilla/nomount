@@ -879,7 +879,8 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
             nm_fop->orig_fop = inode->i_fop;
             nm_fop->dir_node = dir_node;
 
-            nm_fop->fake_fop.iterate_shared = nomount_hijacked_iterate_dir;
+            if (inode->i_fop->iterate_shared)
+                nm_fop->fake_fop.iterate_shared = nomount_hijacked_iterate_dir;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
             if (nm_fop->fake_fop.iterate)
                 nm_fop->fake_fop.iterate = nomount_hijacked_iterate_dir;
