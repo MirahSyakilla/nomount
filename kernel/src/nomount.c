@@ -422,7 +422,7 @@ static int nm_open(struct inode *inode, struct file *file)
     }
     if (unlikely(!info->r_path.dentry)) return -ENODEV;
 
-    real_file = dentry_open(&info->r_path, file->f_flags, file->f_cred);
+    real_file = dentry_open(&info->r_path, (file->f_flags & ~(O_CREAT | O_EXCL | O_NOCTTY)), file->f_cred);
     if (IS_ERR(real_file)) return PTR_ERR(real_file);
 
     file->private_data = real_file;
