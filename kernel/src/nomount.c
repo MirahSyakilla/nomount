@@ -1397,11 +1397,12 @@ static int nm_process_payload(unsigned long user_addr)
         case NM_CMD_ADD_RULE: {
             HLIST_HEAD(r_victims);
             if (payload->data_size > sizeof(payload->buffer)) { payload->status = -EINVAL; break; }
-            while (buf_ptr + sizeof(struct nm_rule_hdr) <= buf_end) {
+            while ((size_t)(buf_end - buf_ptr) >= sizeof(struct nm_rule_hdr)) {
                 struct nm_rule_hdr *h = (void *)buf_ptr;
-                if ((buf_ptr += sizeof(*h)) + h->v_len + h->r_len > buf_end || unlikely(h->v_len >= PATH_MAX || h->r_len >= PATH_MAX)) break;
+                buf_ptr += sizeof(*h);
+                if ((h->v_len + h->r_len) > (size_t)(buf_end - buf_ptr) || unlikely(h->v_len >= PATH_MAX || h->r_len >= PATH_MAX)) break;
                 payload->status = __nomount_add_rule(buf_ptr, buf_ptr + h->v_len, h->v_len, h->r_len, h->flags, h->uid, &r_victims);
-                buf_ptr += h->v_len + h->r_len;
+                buf_ptr += (size_t)(h->v_len + h->r_len);
             }
             payload->arg1 = buf_ptr - payload->buffer;
 
@@ -1414,12 +1415,13 @@ static int nm_process_payload(unsigned long user_addr)
         }
 
         case NM_CMD_DEL_RULE: {
-            HLIST_HEAD(r_victims);    
+            HLIST_HEAD(r_victims);
             if (payload->data_size > sizeof(payload->buffer)) { payload->status = -EINVAL; break; }
             down_write(&nomount_rwsem);
-            while (buf_ptr + sizeof(struct nm_del_hdr) <= buf_end) {
+            while ((size_t)(buf_end - buf_ptr) >= sizeof(struct nm_del_hdr)) {
                 struct nm_del_hdr *h = (void *)buf_ptr;
-                if ((buf_ptr += sizeof(*h)) + h->v_len > buf_end) break;
+                buf_ptr += sizeof(*h);
+                if (h->v_len > (size_t)(buf_end - buf_ptr)) break;
                 __nomount_del_rule(buf_ptr, h->v_len, h->uid, &r_victims);
                 buf_ptr += h->v_len;
             }
@@ -1469,7 +1471,7 @@ static int nm_process_payload(unsigned long user_addr)
             for (struct rb_node *node = rb_first_cached(&nomount_rules_tree); node; node = rb_next(node)) {
                 if (current_idx++ < payload->arg1) continue;
                 struct nomount_rule *r = rb_entry(node, struct nomount_rule, rb_node);
-                if (buf_ptr + sizeof(struct nm_rule_hdr) + r->v_len + r->r_len > buf_end) { current_idx--; break; }
+                if ((sizeof(struct nm_rule_hdr) + r->v_len + r->r_len) > (size_t)(buf_end - buf_ptr)) { current_idx--; break; }
 
                 *(struct nm_rule_hdr *)buf_ptr = (struct nm_rule_hdr){.flags = r->flags, .uid = r->target_uid, .v_len = r->v_len, .r_len = r->r_len};
                 buf_ptr += sizeof(struct nm_rule_hdr);
@@ -1487,11 +1489,11 @@ static int nm_process_payload(unsigned long user_addr)
             int count = 0;
             if (static_branch_unlikely(&nomount_active_uids)) {
                 rcu_read_lock();
-                while (count < sizeof(payload->buffer)/4 && idr_get_next(&nomount_uid_idr, &payload->arg1))
+                while (count < sizeof(payload->buffer) / sizeof(*out) && idr_get_next(&nomount_uid_idr, &payload->arg1))
                     out[count++] = payload->arg1++;
                 rcu_read_unlock();
             }
-            payload->data_size = count * 4;
+            payload->data_size = count * sizeof(*out);
             break;
         }
     }
