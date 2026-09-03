@@ -333,4 +333,13 @@ static inline struct dentry *nm_hash_and_lookup(struct dentry *dir, struct qstr 
     return (unlikely(dir->d_flags & DCACHE_OP_HASH) && dir->d_op->d_hash(dir, n) < 0) ? NULL : d_lookup(dir, n);
 }
 
+#define NM_DOP_INITIALIZING ((const struct dentry_operations *)1L)
+static inline const struct dentry_operations *nm_get_orig_dops(struct nm_iop *iop)
+{
+    const struct dentry_operations *dops;
+    if (!iop) return NULL;
+    dops = smp_load_acquire(&iop->orig_dops);
+    return (dops == NM_DOP_INITIALIZING) ? NULL : dops;
+}
+
 #endif /* _LINUX_NOMOUNT_H */

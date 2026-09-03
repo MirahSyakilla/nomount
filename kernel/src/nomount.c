@@ -690,6 +690,7 @@ static int nm_d_revalidate(struct dentry *dentry, unsigned int flags)
 #endif
 {
     struct nomount_dir_node *parent_dir = NULL;
+    const struct dentry_operations *orig_dops;
     struct nm_rule_info rule_info;
     struct inode *inode;
     struct nm_iop *iop = NULL;
@@ -725,11 +726,11 @@ static int nm_d_revalidate(struct dentry *dentry, unsigned int flags)
     if (injected || (!inode && has_rule))
         goto drop_it;
 
-    if (iop && iop->orig_dops && iop->orig_dops->d_revalidate) {
+    if ((orig_dops = nm_get_orig_dops(iop)) && orig_dops->d_revalidate) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
-        return iop->orig_dops->d_revalidate(parent_inode, name, dentry, flags);
+        return orig_dops->d_revalidate(parent_inode, name, dentry, flags);
 #else
-        return iop->orig_dops->d_revalidate(dentry, flags);
+        return orig_dops->d_revalidate(dentry, flags);
 #endif
     }
     return 1;
@@ -884,7 +885,6 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
 
 static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry)
 {
-    #define NM_DOP_INITIALIZING ((const struct dentry_operations *)1L)
     static const struct dentry_operations nm_dops = { .d_revalidate = nm_d_revalidate };
     const struct dentry_operations *orig, *current_orig;
     struct nm_iop *iop;
