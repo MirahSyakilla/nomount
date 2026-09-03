@@ -146,7 +146,7 @@ static NM_ACTOR_RET nomount_actor_proxy(struct dir_context *ctx, const char *nam
     struct nomount_proxy_ctx *proxy = container_of(ctx, struct nomount_proxy_ctx, ctx);
     NM_ACTOR_RET ret;
 
-    if (proxy->dir_node) {
+    if (proxy->dir_node && !nomount_is_uid_blocked(current_uid().val)) {
         u32 hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name, namelen);
         if (READ_ONCE(proxy->dir_node->bloom_mask) & (1ULL << (hash & 63))) {
             unsigned int seq;
@@ -180,7 +180,7 @@ static inline void nomount_emit_virtual_children(struct dir_context *ctx, struct
 	struct nomount_child_array *array;
 	int id, srcu_idx;
 
-	if (!dir_node) return;
+	if (!dir_node || nomount_is_uid_blocked(current_uid().val)) return;
 	if (!nm_is_virtual_pos(ctx->pos)) ctx->pos = nm_pack_pos(0);
 	srcu_idx = srcu_read_lock(&nomount_srcu);
 	array = srcu_dereference(dir_node->children, &nomount_srcu);
