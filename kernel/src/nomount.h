@@ -40,6 +40,19 @@ static DECLARE_RWSEM(nomount_rwsem);
 static DEFINE_STATIC_KEY_FALSE(nomount_active_uids);
 DEFINE_STATIC_SRCU(nomount_srcu);
 
+/* * Helpers to dynamically calculate the memory address of the strings / structs */
+#define nm_get_vpath(rule) ((rule)->paths)
+#define nm_get_rpath(rule) ((rule)->paths + (rule)->v_len + 1)
+#define nm_get_child_name(rule) (nm_get_vpath(rule) + (rule)->v_len - (rule)->child_len)
+#define nm_get_child_rules(array) ((struct nomount_rule **)((array)->hashes + (array)->capacity))
+#define nm_dir_tag(dir_node) READ_ONCE((dir_node)->_tag_ptr)
+#define nm_dir_is_virtual(dir_node) (nm_dir_tag((dir_node)) & 1UL)
+#define nm_dir_set_owner(dir_node, owner) WRITE_ONCE((dir_node)->_tag_ptr, (unsigned long)(owner) | 1UL)
+#define nm_dir_owner(dir_node) ({ \
+    unsigned long _tag = nm_dir_tag(dir_node); \
+    (_tag & 1UL) ? (struct nomount_rule *)(_tag & ~1UL) : NULL; \
+})
+
 struct nm_iop {
     struct inode_operations fake_iop; /* MUST be exactly at offset 0 */
     const struct inode_operations *orig_iop;
@@ -116,23 +129,6 @@ struct nomount_rule {
     char paths[];
 };
 
-static __always_inline unsigned long nm_dir_tag(const struct nomount_dir_node *dir_node) {
-    return READ_ONCE(dir_node->_tag_ptr);
-}
-
-static __always_inline bool nm_dir_is_virtual(const struct nomount_dir_node *dir_node) {
-    return nm_dir_tag(dir_node) & 1UL;
-}
-
-static __always_inline struct nomount_rule *nm_dir_owner(const struct nomount_dir_node *dir_node) {
-    unsigned long tag = nm_dir_tag(dir_node);
-    return (tag & 1UL) ? (struct nomount_rule *)(tag & ~1UL) : NULL;
-}
-
-static __always_inline void nm_dir_set_owner(struct nomount_dir_node *dir_node, struct nomount_rule *owner) {
-    WRITE_ONCE(dir_node->_tag_ptr, (unsigned long)owner | 1UL);
-}
-
 struct nm_rule_info {
     union {
         struct path r_path;
@@ -141,14 +137,6 @@ struct nm_rule_info {
     unsigned long v_ino;
     u16 flags;
 };
-
-/* * Helpers to dynamically calculate the memory address of the strings / structs */
-#define nm_get_vpath(rule) ((rule)->paths)
-#define nm_get_rpath(rule) ((rule)->paths + (rule)->v_len + 1)
-#define nm_get_child_name(rule) (nm_get_vpath(rule) + (rule)->v_len - (rule)->child_len)
-static __always_inline struct nomount_rule **nm_get_child_rules(struct nomount_child_array *array) {
-    return (struct nomount_rule **)(array->hashes + array->capacity);
-}
 
 /*** Operaction Vectors ***/
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0)
