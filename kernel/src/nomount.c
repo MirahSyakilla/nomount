@@ -1465,6 +1465,7 @@ static int nm_process_payload(unsigned long user_addr)
     }
 
     kunmap(page);
+    set_page_dirty_lock(page);
     put_page(page);
     return 0;
 }
