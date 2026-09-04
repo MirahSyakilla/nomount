@@ -244,8 +244,12 @@ static struct dentry *nomount_resolve_rule_dentry(struct inode *dir, struct dent
     struct dentry *res = ERR_PTR(-ENODATA);
     struct nm_rule_info rule_info = {0};
 
-    if (!nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, NULL, false)) 
-        return res;
+    rcu_read_lock();
+    if (!dir_node || !__nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, &rule_info, false))
+        goto unlock_out;
+    if (rule_info.flags & NM_FLAG_WHITEOUT)
+        goto resolve_rule;
+    rcu_read_unlock();
 
     if (likely((prealloc_inode = new_inode(dir->i_sb)))) {
         if (unlikely(!(prealloc_info = kmalloc(sizeof(*prealloc_info), GFP_KERNEL)))) {
@@ -258,6 +262,7 @@ static struct dentry *nomount_resolve_rule_dentry(struct inode *dir, struct dent
     if (unlikely(!__nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, &rule_info, true)))
         goto unlock_out;
 
+resolve_rule:
     if (unlikely(nomount_is_uid_blocked(current_uid().val))) {
         if (d_is_negative(dentry)) d_drop(dentry);
         goto unlock_out;
