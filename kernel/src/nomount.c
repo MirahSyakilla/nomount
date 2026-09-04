@@ -135,6 +135,7 @@ struct nomount_proxy_ctx {
     struct dir_context *orig_ctx;
     struct nomount_dir_node *dir_node;
     bool emitted;
+    bool uid_blocked;
 };
 
 static NM_ACTOR_RET nomount_actor_proxy(struct dir_context *ctx, const char *name, int namelen,
@@ -143,7 +144,7 @@ static NM_ACTOR_RET nomount_actor_proxy(struct dir_context *ctx, const char *nam
     struct nomount_proxy_ctx *proxy = container_of(ctx, struct nomount_proxy_ctx, ctx);
     NM_ACTOR_RET ret;
 
-    if (proxy->dir_node && !nomount_is_uid_blocked(current_uid().val)) {
+    if (proxy->dir_node && !proxy->uid_blocked) {
         u32 hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name, namelen);
         if (READ_ONCE(proxy->dir_node->bloom_mask) & (1ULL << (hash & 63))) {
             unsigned int seq;
@@ -176,9 +177,10 @@ static NM_ACTOR_RET nomount_actor_proxy(struct dir_context *ctx, const char *nam
 static inline void nomount_emit_virtual_children(struct dir_context *ctx, struct nomount_dir_node *dir_node)
 {
 	struct nomount_child_array *array;
+	uid_t fsuid = current_uid().val;
 	int id, srcu_idx;
 
-	if (!dir_node || nomount_is_uid_blocked(current_uid().val)) return;
+	if (!dir_node || nomount_is_uid_blocked(fsuid)) return;
 	if (!nm_is_virtual_pos(ctx->pos)) ctx->pos = nm_pack_pos(0);
 	srcu_idx = srcu_read_lock(&nomount_srcu);
 	array = srcu_dereference(dir_node->children, &nomount_srcu);
@@ -187,7 +189,7 @@ static inline void nomount_emit_virtual_children(struct dir_context *ctx, struct
 		for (id = nm_unpack_pos(ctx->pos); id < READ_ONCE(array->count); id++) {
 			struct nomount_rule *rule;
 			ctx->pos = nm_pack_pos(id);
-			if ((rule = READ_ONCE(rules[id])) && (rule->target_uid == 0 || rule->target_uid == current_uid().val)) {
+			if ((rule = READ_ONCE(rules[id])) && (rule->target_uid == 0 || rule->target_uid == fsuid)) {
 				if (!(rule->flags & NM_FLAG_WHITEOUT) && !dir_emit(ctx, nm_get_child_name(rule), rule->child_len, rule->v_hash,
 						(rule->flags & NM_FLAG_IS_DIR) ? DT_DIR : DT_REG)) break;
 			}
@@ -338,24 +340,25 @@ static int nomount_hijacked_iterate_dir(struct file *file, struct dir_context *c
     struct nomount_dir_node *dir_node = nm_fop ? READ_ONCE(nm_fop->dir_node) : NULL;
     const struct file_operations *orig_fop = nm_fop ? nm_fop->orig_fop : NULL;
     struct nomount_proxy_ctx proxy_ctx = { .ctx.actor = nomount_actor_proxy };
+    bool is_blocked = nomount_is_uid_blocked(current_uid().val);
     int res = 0;
 
     if (unlikely(!orig_fop || !dir_node))
         goto do_real_iterate;
 
     if (unlikely(nm_is_virtual_pos(ctx->pos))) {
-        if (likely(!nomount_is_uid_blocked(current_uid().val)))
-            nomount_emit_virtual_children(ctx, dir_node);
+        if (likely(!is_blocked)) nomount_emit_virtual_children(ctx, dir_node);
         return 0;
     }
 
-    if (unlikely(nomount_is_uid_blocked(current_uid().val) || !READ_ONCE(dir_node->bloom_mask)))
+    if (unlikely(is_blocked || !READ_ONCE(dir_node->bloom_mask)))
         goto do_real_iterate;
 
     proxy_ctx.ctx.pos = ctx->pos;
     proxy_ctx.orig_ctx = ctx;
     proxy_ctx.dir_node = dir_node;
     proxy_ctx.emitted = false;
+    proxy_ctx.uid_blocked = is_blocked;
 
     res = nm_call_iterate(file, &proxy_ctx.ctx, orig_fop);
     ctx->pos = proxy_ctx.ctx.pos;
@@ -633,8 +636,8 @@ static int nm_dir_iterate_dir(struct file *file, struct dir_context *ctx)
 
     if (real_file) {
         struct nomount_proxy_ctx proxy_ctx = {
-            .ctx.actor = nomount_actor_proxy, .ctx.pos = ctx->pos,
-            .orig_ctx = ctx, .dir_node = dir_node, .emitted = false
+            .ctx.actor = nomount_actor_proxy, .ctx.pos = ctx->pos, .orig_ctx = ctx,
+            .dir_node = dir_node, .emitted = false, .uid_blocked = nomount_is_uid_blocked(current_uid().val)
         };
         res = nm_call_iterate(real_file, &proxy_ctx.ctx, real_file->f_op);
         ctx->pos = proxy_ctx.ctx.pos;
