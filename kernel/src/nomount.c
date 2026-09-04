@@ -52,28 +52,24 @@ static bool __nomount_get_rule_info(struct nomount_dir_node *dir_node, const cha
     do {
         found_rule = NULL;
         seq = read_seqcount_begin(&dir_node->seq);
-        arr = rcu_dereference(dir_node->children);
-        if (likely(arr)) {
-            rule = nomount_bsearch_child(arr, name, len, hash, NULL);
-            if (rule && (!rule->target_uid || rule->target_uid == fsuid)) found_rule = rule;
+        if (likely((arr = rcu_dereference(dir_node->children)))) {
+            if ((rule = nomount_bsearch_child(arr, name, len, hash, NULL)) && (!rule->target_uid || rule->target_uid == fsuid))
+                found_rule = rule;
         }
     } while (read_seqcount_retry(&dir_node->seq, seq));
 
-    if (!found_rule)
-        return false;
+    if (!found_rule) return false;
 
-    if (rule_info) {
+    if (likely(rule_info)) {
         rule_info->flags = found_rule->flags;
         rule_info->v_ino = found_rule->v_ino;
         if (found_rule->flags & NM_FLAG_VIRTUAL_DIR) {
             rule_info->this_dir = found_rule->this_dir;
         } else {
             rule_info->r_path = (get_path && found_rule->r_path.dentry) ? found_rule->r_path : (struct path){ .dentry = NULL, .mnt = NULL };
+            if (rule_info->r_path.dentry) path_get(&rule_info->r_path);
         }
     }
-
-    if (rule_info && get_path && !(found_rule->flags & NM_FLAG_VIRTUAL_DIR) && rule_info->r_path.dentry) 
-        path_get(&rule_info->r_path);
 
     return true;
 }
