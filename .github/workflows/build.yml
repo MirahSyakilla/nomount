@@ -127,7 +127,17 @@ jobs:
   build-module:
     needs: [build-lkm, prepare-module]
     runs-on: ubuntu-latest
+    env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+
     steps:
+      - name: Checkout repo
+        if: env.BOT_TOKEN != '' && env.CHAT_ID != ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
       - name: Download prepared module
         uses: actions/download-artifact@v7
         with:
@@ -146,6 +156,28 @@ jobs:
           pattern: nomount-*
           path: ${{ runner.temp }}/nomount-module-${{ github.run_id }}-${{ github.run_attempt }}/lkm
           merge-multiple: true
+
+      - name: Upload to Telegram
+        if: env.BOT_TOKEN != '' && env.CHAT_ID != ''
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TOPIC_ID: ${{ secrets.TOPIC_ID }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          COMMIT_URL: ${{ github.event.head_commit.url }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          MODULE_BUILD="$RUNNER_TEMP/nomount-module-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          export ZIP_PATH="$RUNNER_TEMP/${{ needs.prepare-module.outputs.artifact-name }}.zip"
+
+          echo "Packing module for Telegram..."
+          cd "$MODULE_BUILD"
+          zip -qr9 "$ZIP_PATH" .
+
+          echo "Uploading to Telegram..."
+          cd "$GITHUB_WORKSPACE"
+          python .github/scripts/telegram_upload.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
