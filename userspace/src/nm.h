@@ -78,6 +78,7 @@
 /* --- DEFS --- */
 #define NOMOUNT_MAGIC_SIG 0x4E4F4D4F554E54ULL
 #define PATH_MAX  4096
+#define NM_EINTR  4
 
 enum {
     NM_CMD_UNSPEC = 0,
@@ -150,16 +151,44 @@ static noinline void print_strn(const char *s, unsigned long len) {
 }
 
 #define print_literal(s) print_strn((s), sizeof(s) - 1)
-#define print_literal_offset(s, offset) print_strn((s) + (offset), sizeof(s) - 1 - (offset))
 
-static noinline void print_uint(unsigned int n) {
+struct nm_output {
+    char *buffer;
+    unsigned int used;
+};
+
+static noinline void list_flush(struct nm_output *out) {
+    unsigned int sent = 0;
+    while (sent < out->used) {
+        long n = sys3(SYS_WRITE, 1, (long)(out->buffer + sent), out->used - sent);
+        if (n == -NM_EINTR) continue;
+        if (n <= 0) break;
+        sent += n;
+    }
+    out->used = 0;
+}
+
+static noinline void list_print_strn(struct nm_output *out, const char *s, unsigned long len) {
+    while (len) {
+        if (out->used == PATH_MAX) list_flush(out);
+        unsigned long n = PATH_MAX - out->used;
+        if (n > len) n = len;
+        for (unsigned long i = 0; i < n; i++) out->buffer[out->used++] = *s++;
+        len -= n;
+    }
+}
+
+#define list_print_literal(out, s) list_print_strn((out), (s), sizeof(s) - 1)
+#define list_print_literal_offset(out, s, offset) list_print_strn((out), (s) + (offset), sizeof(s) - 1 - (offset))
+
+static noinline void list_print_uint(struct nm_output *out, unsigned int n) {
     char buf[10];
     int i = sizeof(buf);
     do {
         buf[--i] = (n % 10) + '0';
         n /= 10;
     } while (n > 0);
-    print_strn(&buf[i], sizeof(buf) - i);
+    list_print_strn(out, &buf[i], sizeof(buf) - i);
 }
 
 /* path resolution */
