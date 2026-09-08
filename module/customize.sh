@@ -32,28 +32,39 @@ else
 fi
 
 USE_KSUD=false
-if command -v ksud >/dev/null 2>&1 && ksud -h 2>&1 | grep -qE '(^|[[:space:]])insmod([[:space:]]|$)'; then
-  USE_KSUD=true
-  ui_print "- KernelSU ksud insmod detected; lkmloader will remain as fallback."
-fi
 
 mv "$MODPATH/bin/lkmloader-$ARCH" "$MODPATH/lkm/lkmloader"
 set_perm "$MODPATH/lkm/lkmloader" 0 0 0755
 rm -rf "$MODPATH"/bin/nm-* "$MODPATH"/bin/ko-loader-*
 
 load_ko() {
-  if [ "$USE_KSUD" = true ]; then
-    if ksud insmod "$1" && "$MODPATH/bin/nm" version >/dev/null 2>&1; then return 0; fi
+  local ko_path="$1"
+  local output
+  local ret
+
+  if [ "$USE_KSUD" = true ] && [ "$MODULE_WAS_BUSY" = false ]; then
+    if ksud insmod "$ko_path" >/dev/null 2>&1 && "$MODPATH/bin/nm" version >/dev/null 2>&1; then 
+      return 0
+    fi
     ui_print "  [!] ksud insmod failed; falling back to lkmloader."
     rmmod nomount 2>/dev/null
     USE_KSUD=false
   fi
 
-  if ! { "$MODPATH/lkm/lkmloader" "$1" 2>&1 && "$MODPATH/bin/nm" version >/dev/null 2>&1; }; then
-    return 1
+  output=$("$MODPATH/lkm/lkmloader" "$ko_path" 2>&1)
+  ret=$?
+
+  if [ $ret -eq 0 ] && "$MODPATH/bin/nm" version >/dev/null 2>&1; then
+    return 0
   fi
 
-  return 0
+  if [ "$MODULE_WAS_BUSY" = true ] && echo "$output" | grep -iq "File exists"; then
+    ui_print "  [~] lkmloader verified compatibility (Dry-run pass)."
+    return 0
+  fi
+
+  ui_print "  [!] lkmloader output: $output"
+  return 1
 }
 
 OLD_MODPATH="/data/adb/modules/nomount"
@@ -70,13 +81,25 @@ NOMOUNT_LOADED=false
 OLD_LKM_UNLOADED=false
 RESTORED_OLD_KO=false
 IS_BUILTIN=false
+MODULE_WAS_BUSY=false
 
 ui_print "- Checking Kernel support via Internal API..."
 if "$MODPATH/bin/nm" version > /dev/null 2>&1 || "$OLD_MODPATH/bin/nm" version > /dev/null 2>&1; then
   if grep -q '^nomount ' /proc/modules; then
-    ui_print "  [*] Active LKM detected during update. Unloading old driver..."
-    rmmod nomount 2>/dev/null
-    OLD_LKM_UNLOADED=true
+    ui_print "  [*] Active LKM detected during update."
+    ui_print "  [*] Clearing active rules to flush VFS references..."
+    "$MODPATH/bin/nm" clear all >/dev/null 2>&1 || "$OLD_MODPATH/bin/nm" clear all >/dev/null 2>&1
+    sleep 1
+    ui_print "  [*] Attempting safe unload of the old driver..."
+    rmmod_output=$(rmmod nomount 2>&1)
+    if [ $? -eq 0 ]; then
+      ui_print "  [+] Old driver unloaded successfully."
+      OLD_LKM_UNLOADED=true
+    else
+      ui_print "  [!] rmmod failed: $rmmod_output"
+      ui_print "  [!] Old driver is busy. Using 'File exists' as compatibility dry-run."
+      MODULE_WAS_BUSY=true
+    fi
   else
     IS_BUILTIN=true
   fi
@@ -87,7 +110,14 @@ if [ "$IS_BUILTIN" = true ]; then
   NOMOUNT_LOADED=true
   rm -rf "$MODPATH/lkm"
 else
-  ui_print "  [*] Built-in support not found. Attempting LKM injection..."
+  if [ "$MODULE_WAS_BUSY" = false ]; then
+    ui_print "  [*] Built-in support not found. Attempting LKM injection..."
+  fi
+
+  if command -v ksud >/dev/null 2>&1 && ksud -h 2>&1 | grep -qE '(^|[[:space:]])insmod([[:space:]]|$)'; then
+    USE_KSUD=true
+    ui_print "- KernelSU ksud insmod detected; lkmloader will remain as fallback."
+  fi
 
   EXACT_MATCH="$MODPATH/lkm/nomount-${AKVER}-${KVER}.ko"
   if [ -n "$AKVER" ] && [ -f "$EXACT_MATCH" ]; then
@@ -95,6 +125,9 @@ else
     if load_ko "$EXACT_MATCH"; then
       mv "$EXACT_MATCH" "$MODPATH/lkm/nomount.ko"
       NOMOUNT_LOADED=true
+      if [ "$MODULE_WAS_BUSY" = true ]; then
+        ui_print "  [+] Update staged. It will fully apply on the next reboot."
+      fi
     else
       rmmod nomount 2>/dev/null
     fi
@@ -107,6 +140,9 @@ else
       if load_ko "$mod"; then
         mv "$mod" "$MODPATH/lkm/nomount.ko"
         NOMOUNT_LOADED=true
+        if [ "$MODULE_WAS_BUSY" = true ]; then
+          ui_print "  [+] Fallback update staged. It will fully apply on next reboot."
+        fi
         break
       else
         rmmod nomount 2>/dev/null
