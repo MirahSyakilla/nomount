@@ -4,8 +4,6 @@
 #include <linux/types.h>
 #include <linux/idr.h>
 #include <linux/list.h>
-#include <linux/hashtable.h>
-#include <linux/rbtree.h>
 #include <linux/rcupdate.h>
 #include <linux/rwsem.h>
 #include <linux/srcu.h>
@@ -14,7 +12,6 @@
 #include <linux/key-type.h>
 #include <linux/highmem.h>
 #include <linux/version.h>
-#include <linux/jump_label.h>
 #include <linux/compat.h>
 
 #define NOMOUNT_VERSION "20"
@@ -34,8 +31,9 @@
 #define nm_warn(fmt, ...) printk(KERN_WARNING "NoMount: [WARN] " fmt, ##__VA_ARGS__)
 #define nm_err(fmt, ...)  printk(KERN_ERR "NoMount: [ERROR] " fmt, ##__VA_ARGS__)
 
-static struct rb_root_cached nomount_rules_tree = RB_ROOT_CACHED;
+static void __rcu *nomount_art_root = NULL;
 struct nm_uid_array __rcu *nomount_uids = NULL;
+static LIST_HEAD(nomount_rules_list);
 static LIST_HEAD(nomount_sb_list);
 static DECLARE_RWSEM(nomount_rwsem);
 DEFINE_STATIC_SRCU(nomount_srcu);
@@ -121,10 +119,8 @@ struct nomount_rule {
     u16 flags;
 
     struct nomount_dir_node *parent_dir;
-    union {
-        struct rb_node rb_node;
-        struct hlist_node vpath_node;
-    };
+    struct list_head list_node;
+    struct nomount_rule *next_uid;
     char paths[];
 };
 
@@ -185,54 +181,337 @@ static inline int nm_unpack_pos(loff_t pos) {
     return (int)(pos & 0xFFFFFFFF);
 }
 
-/** RBTree Protocol ****/
+/**** Adaptive Radix Tree Protocol ****/
+// ref: https://db.in.tum.de/~leis/papers/ART.pdf
+
+#define ART_NODE4   1
+#define ART_NODE16  2
+#define ART_NODE48  3
+#define ART_NODE256 4
+
+struct art_node {
+    u8 type;
+    u8 num_children;
+    u16 prefix_len;
+    struct rcu_head rcu;
+};
+
+struct art_node4 {
+    struct art_node n;
+    u8 keys[4];
+    void __rcu *children[4];
+};
+
+struct art_node16 {
+    struct art_node n;
+    u8 keys[16];
+    void __rcu *children[16];
+};
+
+struct art_node48 {
+    struct art_node n;
+    u8 child_index[256];
+    void __rcu *children[48];
+};
+
+struct art_node256 {
+    struct art_node n;
+    void __rcu *children[256];
+};
+
+#define ART_IS_LEAF(x)   ((unsigned long)(x) & 1UL)
+#define ART_GET_LEAF(x)  ((struct nomount_rule *)((unsigned long)(x) & ~1UL))
+#define ART_MAKE_LEAF(x) ((void *)((unsigned long)(x) | 1UL))
+
+static void __rcu **nm_art_find_child(struct art_node *n, u8 c)
+{
+    switch (n->type) {
+        case ART_NODE4: {
+            struct art_node4 *n4 = (struct art_node4 *)n;
+            for (int i = 0; i < n->num_children; i++)
+                if (n4->keys[i] == c) return &n4->children[i];
+            break;
+        }
+        case ART_NODE16: {
+            struct art_node16 *n16 = (struct art_node16 *)n;
+            void *match = memchr(n16->keys, c, n->num_children);
+            if (match) return &n16->children[(u8 *)match - n16->keys];
+            break;
+        }
+        case ART_NODE48: {
+            struct art_node48 *n48 = (struct art_node48 *)n;
+            u8 i = n48->child_index[c];
+            if (i) return &n48->children[i - 1];
+            break;
+        }
+        case ART_NODE256: {
+            struct art_node256 *n256 = (struct art_node256 *)n;
+            if (n256->children[c]) return &n256->children[c];
+            break;
+        }
+    }
+    return NULL;
+}
+
 static struct nomount_rule *nm_tree_search_path(u32 hash, u16 len, const char *path)
 {
-    struct rb_node *node = nomount_rules_tree.rb_root.rb_node;
-    while (node) {
-        struct nomount_rule *r = rb_entry(node, struct nomount_rule, rb_node);
-        int cmp = (hash != r->v_hash) ? (hash < r->v_hash ? -1 : 1) :
-                  (len != r->v_len)   ? (len < r->v_len ? -1 : 1) :
-                  memcmp(path, nm_get_vpath(r), len);
+    void *node = rcu_dereference(nomount_art_root);
+    void __rcu **child;
+    int depth = 0;
 
-        if (!cmp) return r;
-        node = cmp < 0 ? node->rb_left : node->rb_right;
+    while (node) {
+        if (ART_IS_LEAF(node)) {
+            struct nomount_rule *r = ART_GET_LEAF(node);
+            if (likely(r->v_len == len && !memcmp(nm_get_vpath(r), path, len))) return r;
+            return NULL;
+        }
+
+        struct art_node *n = node;
+        depth += n->prefix_len;
+        if (unlikely(depth > len)) return NULL;
+        child = nm_art_find_child(n, path[depth]);
+        node = child ? rcu_dereference(*child) : NULL;
+        if (likely(node)) depth++;
     }
     return NULL;
 }
 
 static struct nomount_rule *nm_tree_search_exact(u32 hash, u16 len, const char *path, unsigned int uid)
 {
-    struct rb_node *node = nomount_rules_tree.rb_root.rb_node;
-    while (node) {
-        struct nomount_rule *r = rb_entry(node, struct nomount_rule, rb_node);
-        int cmp = (hash != r->v_hash) ? (hash < r->v_hash ? -1 : 1) :
-                  (len != r->v_len)   ? (len < r->v_len ? -1 : 1) :
-                  (cmp = memcmp(path, nm_get_vpath(r), len)) ? cmp :
-                  (uid != r->target_uid) ? (uid < r->target_uid ? -1 : 1) : 0;
-
-        if (!cmp) return r;
-        node = cmp < 0 ? node->rb_left : node->rb_right;
+    struct nomount_rule *r = nm_tree_search_path(hash, len, path);
+    while (r) {
+        if (r->target_uid == uid) return r;
+        r = r->next_uid;
     }
     return NULL;
 }
 
+static void nm_art_add_child(void __rcu **ref, u8 c, void *child)
+{
+    void *node = rcu_dereference_protected(*ref, lockdep_is_held(&nomount_rwsem));
+    struct art_node *n = node;
+
+    if (n->type == ART_NODE4) {
+        struct art_node4 *n4 = (struct art_node4 *)n;
+        if (n->num_children < 4) {
+            n4->keys[n->num_children] = c;
+            rcu_assign_pointer(n4->children[n->num_children], child);
+            n->num_children++;
+            return;
+        }
+
+        struct art_node16 *n16 = kzalloc(sizeof(*n16), GFP_KERNEL);
+        n16->n = n4->n;
+        n16->n.type = ART_NODE16;
+        memcpy(n16->keys, n4->keys, 4);
+        for (int i = 0; i < 4; i++)
+            RCU_INIT_POINTER(n16->children[i], rcu_dereference_protected(n4->children[i], lockdep_is_held(&nomount_rwsem)));
+        n16->keys[4] = c;
+        RCU_INIT_POINTER(n16->children[4], child);
+        n16->n.num_children++;
+        rcu_assign_pointer(*ref, n16);
+        kfree_rcu(n4, n.rcu);
+    } else if (n->type == ART_NODE16) {
+        struct art_node16 *n16 = (struct art_node16 *)n;
+        if (n->num_children < 16) {
+            n16->keys[n->num_children] = c;
+            rcu_assign_pointer(n16->children[n->num_children], child);
+            n->num_children++;
+            return;
+        }
+
+        struct art_node48 *n48 = kzalloc(sizeof(*n48), GFP_KERNEL);
+        n48->n = n16->n;
+        n48->n.type = ART_NODE48;
+        for (int i = 0; i < 16; i++) {
+            n48->child_index[n16->keys[i]] = i + 1;
+            RCU_INIT_POINTER(n48->children[i], rcu_dereference_protected(n16->children[i], lockdep_is_held(&nomount_rwsem)));
+        }
+        n48->child_index[c] = 17;
+        RCU_INIT_POINTER(n48->children[16], child);
+        n48->n.num_children++;
+        rcu_assign_pointer(*ref, n48);
+        kfree_rcu(n16, n.rcu);
+    } else if (n->type == ART_NODE48) {
+        struct art_node48 *n48 = (struct art_node48 *)n;
+        if (n->num_children < 48) {
+            int pos = 0;
+            while (rcu_dereference_protected(n48->children[pos], lockdep_is_held(&nomount_rwsem))) pos++;
+            n48->child_index[c] = pos + 1;
+            rcu_assign_pointer(n48->children[pos], child);
+            n->num_children++;
+            return;
+        }
+
+        struct art_node256 *n256 = kzalloc(sizeof(*n256), GFP_KERNEL);
+        n256->n = n48->n;
+        n256->n.type = ART_NODE256;
+        for (int i = 0; i < 256; i++) {
+            if (n48->child_index[i])
+                RCU_INIT_POINTER(n256->children[i], rcu_dereference_protected(n48->children[n48->child_index[i] - 1], lockdep_is_held(&nomount_rwsem)));
+        }
+        RCU_INIT_POINTER(n256->children[c], child);
+        n256->n.num_children++;
+        rcu_assign_pointer(*ref, n256);
+        kfree_rcu(n48, n.rcu);
+    } else if (n->type == ART_NODE256) {
+        struct art_node256 *n256 = (struct art_node256 *)n;
+        rcu_assign_pointer(n256->children[c], child);
+        n256->n.num_children++;
+    }
+}
+
+static struct nomount_rule *nm_art_minimum(void *node)
+{
+    while (!ART_IS_LEAF(node)) {
+        struct art_node *n = node;
+        if (n->type == ART_NODE4) node = rcu_dereference_protected(((struct art_node4 *)n)->children[0], lockdep_is_held(&nomount_rwsem));
+        else if (n->type == ART_NODE16) node = rcu_dereference_protected(((struct art_node16 *)n)->children[0], lockdep_is_held(&nomount_rwsem));
+        else if (n->type == ART_NODE48) {
+            struct art_node48 *n48 = (struct art_node48 *)n;
+            for (int i = 0; i < 256; i++) {
+                if (n48->child_index[i]) {
+                    node = rcu_dereference_protected(n48->children[n48->child_index[i] - 1], lockdep_is_held(&nomount_rwsem));
+                    break;
+                }
+            }
+        } else if (n->type == ART_NODE256) {
+            struct art_node256 *n256 = (struct art_node256 *)n;
+            for (int i = 0; i < 256; i++) {
+                if (rcu_dereference_protected(n256->children[i], lockdep_is_held(&nomount_rwsem))) {
+                    node = rcu_dereference_protected(n256->children[i], lockdep_is_held(&nomount_rwsem));
+                    break;
+                }
+            }
+        }
+    }
+    return ART_GET_LEAF(node);
+}
+
 static void nm_tree_insert(struct nomount_rule *new_rule)
 {
-    struct rb_node **link = &nomount_rules_tree.rb_root.rb_node, *parent = NULL;
-    bool leftmost = true;
-    while (*link) {
-        parent = *link;
-        struct nomount_rule *r = rb_entry(parent, struct nomount_rule, rb_node);
-        int cmp = (new_rule->v_hash != r->v_hash) ? (new_rule->v_hash < r->v_hash ? -1 : 1) :
-                  (new_rule->v_len != r->v_len)   ? (new_rule->v_len < r->v_len ? -1 : 1) :
-                  (cmp = memcmp(nm_get_vpath(new_rule), nm_get_vpath(r), new_rule->v_len)) ? cmp :
-                  (new_rule->target_uid != r->target_uid) ? (new_rule->target_uid < r->target_uid ? -1 : 1) : 0;
+    const char *key = nm_get_vpath(new_rule);
+    void __rcu **child, **node_ref = &nomount_art_root;
+    void *node;
+    int depth = 0;
 
-        link = cmp < 0 ? &parent->rb_left : (leftmost = false, &parent->rb_right);
+    list_add_tail(&new_rule->list_node, &nomount_rules_list);
+    while ((node = rcu_dereference_protected(*node_ref, lockdep_is_held(&nomount_rwsem)))) {
+        if (ART_IS_LEAF(node)) {
+            struct nomount_rule *existing = ART_GET_LEAF(node);
+            if (existing->v_len == new_rule->v_len && !memcmp(nm_get_vpath(existing), key, new_rule->v_len)) {
+                new_rule->next_uid = existing->next_uid;
+                existing->next_uid = new_rule;
+                return;
+            }
+
+            struct art_node4 *n4 = kzalloc(sizeof(*n4), GFP_KERNEL);
+            n4->n.type = ART_NODE4;
+            n4->n.num_children = 2;
+
+            const char *existing_key = nm_get_vpath(existing);
+            int p = 0, max_cmp = min_t(int, existing->v_len, new_rule->v_len) - depth;
+            while (p < max_cmp && existing_key[depth + p] == key[depth + p]) p++;
+
+            n4->n.prefix_len = p;
+            depth += p;
+
+            n4->keys[0] = existing_key[depth];
+            RCU_INIT_POINTER(n4->children[0], node);
+            n4->keys[1] = key[depth];
+            RCU_INIT_POINTER(n4->children[1], ART_MAKE_LEAF(new_rule));
+            rcu_assign_pointer(*node_ref, n4);
+            return;
+        }
+
+        struct art_node *n = node;
+        if (n->prefix_len > 0) {
+            struct nomount_rule *borrowed = nm_art_minimum(node);
+            const char *borrowed_key = nm_get_vpath(borrowed);
+            int p = 0, max_cmp = min_t(int, n->prefix_len, new_rule->v_len - depth);
+
+            while (p < max_cmp && borrowed_key[depth + p] == key[depth + p]) p++;
+            if (p < n->prefix_len) {
+                struct art_node4 *n4 = kzalloc(sizeof(*n4), GFP_KERNEL);
+                n4->n.type = ART_NODE4;
+                n4->n.num_children = 2;
+                n4->n.prefix_len = p;
+                n->prefix_len -= (p + 1);
+                n4->keys[0] = borrowed_key[depth + p];
+                RCU_INIT_POINTER(n4->children[0], node);
+                n4->keys[1] = key[depth + p];
+                RCU_INIT_POINTER(n4->children[1], ART_MAKE_LEAF(new_rule));
+                rcu_assign_pointer(*node_ref, n4);
+                return;
+            }
+        }
+
+        depth += n->prefix_len;
+        if ((child = nm_art_find_child(n, key[depth]))) {
+            node_ref = child;
+            depth++;
+        } else {
+            nm_art_add_child(node_ref, key[depth], ART_MAKE_LEAF(new_rule));
+            return;
+        }
     }
-    rb_link_node(&new_rule->rb_node, parent, link);
-    rb_insert_color_cached(&new_rule->rb_node, &nomount_rules_tree, leftmost);
+    rcu_assign_pointer(*node_ref, ART_MAKE_LEAF(new_rule));
+}
+
+static void nm_art_free_tree(void *node)
+{
+    if (!node || ART_IS_LEAF(node)) return;
+
+    struct art_node *n = node;
+    if (n->type == ART_NODE4) {
+        struct art_node4 *n4 = (struct art_node4 *)n;
+        for (int i = 0; i < n->num_children; i++) nm_art_free_tree(rcu_access_pointer(n4->children[i]));
+    } else if (n->type == ART_NODE16) {
+        struct art_node16 *n16 = (struct art_node16 *)n;
+        for (int i = 0; i < n->num_children; i++) nm_art_free_tree(rcu_access_pointer(n16->children[i]));
+    } else if (n->type == ART_NODE48) {
+        struct art_node48 *n48 = (struct art_node48 *)n;
+        for (int i = 0; i < 256; i++) {
+            if (n48->child_index[i]) nm_art_free_tree(rcu_access_pointer(n48->children[n48->child_index[i] - 1]));
+        }
+    } else if (n->type == ART_NODE256) {
+        struct art_node256 *n256 = (struct art_node256 *)n;
+        for (int i = 0; i < 256; i++) {
+            if (rcu_access_pointer(n256->children[i])) nm_art_free_tree(rcu_access_pointer(n256->children[i]));
+        }
+    }
+    kfree(n);
+}
+
+static void nm_art_remove_leaf(void __rcu **ref, struct nomount_rule *target)
+{
+    void *node;
+    const char *key = nm_get_vpath(target);
+    int depth = 0;
+
+    while ((node = rcu_dereference_protected(*ref, lockdep_is_held(&nomount_rwsem)))) {
+        if (ART_IS_LEAF(node)) {
+            struct nomount_rule *r = ART_GET_LEAF(node);
+            if (r->v_len == target->v_len && !memcmp(nm_get_vpath(r), key, target->v_len)) {
+                if (r == target) {
+                    if (target->next_uid) rcu_assign_pointer(*ref, ART_MAKE_LEAF(target->next_uid));
+                    else RCU_INIT_POINTER(*ref, NULL);
+                } else {
+                    struct nomount_rule *prev = r;
+                    while (prev->next_uid && prev->next_uid != target) prev = prev->next_uid;
+                    if (prev->next_uid == target) prev->next_uid = target->next_uid;
+                }
+            }
+            return;
+        }
+
+        struct art_node *n = node;
+        depth += n->prefix_len;
+        if (depth > target->v_len) return;
+        ref = nm_art_find_child(n, key[depth]);
+        if (!ref) return;
+        depth++;
+    }
 }
 
 /* --- UIDs Array RCU Management --- */
