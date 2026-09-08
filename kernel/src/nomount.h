@@ -363,30 +363,19 @@ static void nm_art_add_child(void **ref, u8 c, void *child)
     }
 }
 
+static void *nm_art_first_child(struct art_node *n)
+{
+    if (n->type == ART_NODE4) return ((struct art_node4 *)n)->children[0];
+    if (n->type == ART_NODE16) return ((struct art_node16 *)n)->children[0];
+    void **children = n->type == ART_NODE48 ? ((struct art_node48 *)n)->children : ((struct art_node256 *)n)->children;
+    int capacity = n->type == ART_NODE48 ? 48 : 256;
+    for (int i = 0; i < capacity; i++) if (children[i]) return children[i];
+    return NULL;
+}
+
 static struct nomount_rule *nm_art_minimum(void *node)
 {
-    while (!ART_IS_LEAF(node)) {
-        struct art_node *n = node;
-        if (n->type == ART_NODE4) node = ((struct art_node4 *)n)->children[0];
-        else if (n->type == ART_NODE16) node = ((struct art_node16 *)n)->children[0];
-        else if (n->type == ART_NODE48) {
-            struct art_node48 *n48 = (struct art_node48 *)n;
-            for (int i = 0; i < 256; i++) {
-                if (n48->child_index[i]) {
-                    node = n48->children[n48->child_index[i] - 1];
-                    break;
-                }
-            }
-        } else if (n->type == ART_NODE256) {
-            struct art_node256 *n256 = (struct art_node256 *)n;
-            for (int i = 0; i < 256; i++) {
-                if (n256->children[i]) {
-                    node = n256->children[i];
-                    break;
-                }
-            }
-        }
-    }
+    while (!ART_IS_LEAF(node)) node = nm_art_first_child(node);
     return ART_GET_LEAF(node);
 }
 
@@ -485,9 +474,38 @@ static void nm_art_free_tree(void *node)
     kfree(n);
 }
 
+static void nm_art_remove_child(void **parent_ref, void **child_ref, u8 key)
+{
+    struct art_node *n = *parent_ref;
+    int last = --n->num_children;
+
+    if (n->type == ART_NODE4) {
+        struct art_node4 *n4 = (struct art_node4 *)n;
+        int pos = child_ref - n4->children;
+        n4->keys[pos] = n4->keys[last];
+        n4->children[pos] = n4->children[last];
+    } else if (n->type == ART_NODE16) {
+        struct art_node16 *n16 = (struct art_node16 *)n;
+        int pos = child_ref - n16->children;
+        n16->keys[pos] = n16->keys[last];
+        n16->children[pos] = n16->children[last];
+    } else if (n->type == ART_NODE48) {
+        ((struct art_node48 *)n)->child_index[key] = 0;
+    }
+
+    if (n->num_children == 1) {
+        void *child = nm_art_first_child(n);
+        if (!ART_IS_LEAF(child))
+            ((struct art_node *)child)->prefix_len += n->prefix_len + 1;
+        *parent_ref = child;
+        kfree(n);
+    }
+}
+
 static void nm_art_remove_leaf(void **ref, struct nomount_rule *target)
 {
     void *node;
+    void **parent_ref = NULL;
     const char *key = nm_get_vpath(target);
     int depth = 0;
 
@@ -497,7 +515,10 @@ static void nm_art_remove_leaf(void **ref, struct nomount_rule *target)
             if (r->v_len == target->v_len && !memcmp(nm_get_vpath(r), key, target->v_len)) {
                 if (r == target) {
                     if (target->next_uid) *ref = ART_MAKE_LEAF(target->next_uid);
-                    else *ref = NULL;
+                    else {
+                        *ref = NULL;
+                        if (parent_ref) nm_art_remove_child(parent_ref, ref, key[depth - 1]);
+                    }
                 } else {
                     struct nomount_rule *prev = r;
                     while (prev->next_uid && prev->next_uid != target) prev = prev->next_uid;
@@ -510,6 +531,7 @@ static void nm_art_remove_leaf(void **ref, struct nomount_rule *target)
         struct art_node *n = node;
         depth += n->prefix_len;
         if (depth > target->v_len) return;
+        parent_ref = ref;
         ref = nm_art_find_child(n, key[depth]);
         if (!ref) return;
         depth++;
