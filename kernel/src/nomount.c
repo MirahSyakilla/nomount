@@ -1158,9 +1158,8 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
         int parent_len = (i == 0) ? 1 : i;
         const char *child_name = v_path + i + 1;
         size_t child_len = p_len - i - 1;
-        u32 h_parent = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, v_path, parent_len);
 
-        if ((ex = nm_tree_search_path(h_parent, parent_len, v_path))) {
+        if ((ex = nm_tree_search_path(parent_len, v_path))) {
             if (!(ex->flags & NM_FLAG_IS_DIR)) { err = -ENOTDIR; break; }
             if (unlikely(!(dir_node = ex->this_dir))) { err = -ENOMEM; break; }
             err = __nomount_inject_child_locked(dir_node, current_rule, child_name, child_len);
@@ -1194,9 +1193,9 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
         if (!(irule = kmalloc(sizeof(struct nomount_rule) + parent_len + 2, GFP_KERNEL))) { err = -ENOMEM; break; }
         *irule = (struct nomount_rule){0};
         irule->v_len = parent_len;
-        irule->v_hash = h_parent;
+        irule->v_hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, v_path, parent_len);
         irule->flags = NM_FLAG_IS_DIR | NM_FLAG_VIRTUAL_DIR;
-        irule->v_ino = (unsigned long)h_parent;
+        irule->v_ino = (unsigned long)irule->v_hash;
         memcpy(nm_get_vpath(irule), v_path, parent_len);
         nm_get_vpath(irule)[parent_len] = '\0';
         nm_get_rpath(irule)[0] = '\0';
@@ -1352,7 +1351,7 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
         return PTR_ERR(rule);
 
     down_write(&nomount_rwsem);
-    if ((existing = nm_tree_search_exact(rule->v_hash, rule->v_len, nm_get_vpath(rule), target_uid))) {
+    if ((existing = nm_tree_search_exact(rule->v_len, nm_get_vpath(rule), target_uid))) {
         if (existing->this_dir && (rule->flags & NM_FLAG_IS_DIR)) {
             if (rule->this_dir) call_rcu(&rule->this_dir->rcu, nm_dir_rcu_free);
             rule->this_dir = existing->this_dir;
@@ -1381,8 +1380,7 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
 static void __nomount_del_rule(const char *v_path, u16 v_len, unsigned int target_uid, struct list_head *r_victims)
 {
     while (v_len > 1 && v_path[v_len - 1] == '/') v_len--;
-    u32 hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, v_path, v_len);
-    struct nomount_rule *rule = nm_tree_search_exact(hash, v_len, v_path, target_uid);
+    struct nomount_rule *rule = nm_tree_search_exact(v_len, v_path, target_uid);
     if (rule) nm_detach_rule_locked(rule, r_victims, true);
 }
 

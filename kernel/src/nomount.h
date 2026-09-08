@@ -255,7 +255,7 @@ static void **nm_art_find_child(struct art_node *n, u8 c)
     return NULL;
 }
 
-static struct nomount_rule *nm_tree_search_path(u32 hash, u16 len, const char *path)
+static struct nomount_rule *nm_tree_search_path(u16 len, const char *path)
 {
     void *node = nomount_art_root;
     void **child;
@@ -278,9 +278,9 @@ static struct nomount_rule *nm_tree_search_path(u32 hash, u16 len, const char *p
     return NULL;
 }
 
-static struct nomount_rule *nm_tree_search_exact(u32 hash, u16 len, const char *path, unsigned int uid)
+static struct nomount_rule *nm_tree_search_exact(u16 len, const char *path, unsigned int uid)
 {
-    struct nomount_rule *r = nm_tree_search_path(hash, len, path);
+    struct nomount_rule *r = nm_tree_search_path(len, path);
     while (r) {
         if (r->target_uid == uid) return r;
         r = r->next_uid;
