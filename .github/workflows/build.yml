@@ -6,8 +6,11 @@ on:
     paths-ignore: 
       - '**.md'
       - '**.git*'
-      - '**.sh'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-lkm:
@@ -53,6 +56,7 @@ jobs:
           ../sstrip -z nm-arm64
           ../sstrip -z nm-arm
 
+          wc -c nm-*
           file nm-*
           mkdir -p ../module/bin
           mv nm-* ../module/bin/
@@ -69,6 +73,7 @@ jobs:
             -fno-ident -flto -fmerge-all-constants -fomit-frame-pointer src/lkmloader.c -o lkmloader-arm
 
           ../sstrip -z lkmloader-*
+          wc -c lkmloader-*
           file lkmloader-*
           mv lkmloader-* ../module/bin/
 

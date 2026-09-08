@@ -92,7 +92,7 @@ jobs:
       image: ghcr.io/ylarod/ddk-min:${{ matrix.kmi }}
 
     env:
-      MODULE_DIR: ${{ github.workspace }}/build/nomount
+      SRC_DIR: ${{ github.workspace }}/kernel/src
       ARTIFACT: artifacts/nomount-${{ matrix.kmi }}.ko
 
     steps:
@@ -102,7 +102,6 @@ jobs:
       - name: Validate DDK environment
         run: |
           set -euo pipefail
-
           if [[ -z "${KDIR:-}" || ! -f "$KDIR/Makefile" ]]; then
             echo "KDIR is not available in the DDK container: ${KDIR:-<empty>}" >&2
             exit 1
@@ -116,23 +115,18 @@ jobs:
           echo "KMI: ${{ matrix.kmi }}"
           echo "KDIR: $KDIR"
           clang --version
-
-      - name: Prepare module
-        run: |
-          set -euo pipefail
-          mkdir -p "$MODULE_DIR"
-          cp kernel/src/* "$MODULE_DIR/"
+          ld.lld --version
 
       - name: Build module
         run: |
           set -euo pipefail
-          CONFIG_NOMOUNT=m make -j"$(nproc)" -C "$KDIR" ARCH=arm64 CC=clang M="$MODULE_DIR" modules
+          CONFIG_NOMOUNT=m make -j"$(nproc)" -C "$KDIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 M="$SRC_DIR" modules
 
       - name: Collect module
         run: |
           set -euo pipefail
-          install -Dm644 "$MODULE_DIR/nomount.ko" "$ARTIFACT"
-          llvm-strip --strip-debug -R .BTF "$ARTIFACT"
+          install -Dm644 "$SRC_DIR/nomount.ko" "$ARTIFACT"
+          llvm-strip --strip-unneeded -R .BTF "$ARTIFACT"
           ls -lh "$ARTIFACT"
 
       - name: Upload module
