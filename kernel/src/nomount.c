@@ -1398,9 +1398,44 @@ static void __nomount_clear_all(int clear_flags)
     }
     if (clear_flags & NM_CLEAR_RULES) {
         void *old_art_root = nomount_art_root;
+        struct rcu_head *retired = NULL, *head;
+
         nomount_art_root = NULL;
-        list_for_each_entry_safe(rule, n, &nomount_rules_list, list_node) nm_detach_rule_locked(rule, &r_victims, false);
+        list_splice_init(&nomount_rules_list, &r_victims);
+        rcu_read_lock();
+        list_for_each_entry(rule, &r_victims, list_node) {
+            struct nomount_dir_node *dir = rule->parent_dir;
+            void *children;
+
+            if (!dir || !(children = rcu_dereference_protected(dir->children, lockdep_is_held(&nomount_rwsem))))
+                continue;
+
+            write_seqcount_begin(&dir->seq);
+            rcu_assign_pointer(dir->children, NULL);
+            dir->bloom_mask = 0;
+            write_seqcount_end(&dir->seq);
+
+            if (!nm_children_is_single(children)) {
+                struct nomount_child_array *arr = children;
+                arr->rcu.next = retired;
+                retired = &arr->rcu;
+            }
+            if (!nm_dir_is_virtual(dir)) {
+                smp_mb();
+                if (!rcu_access_pointer(dir->iop) && !rcu_access_pointer(dir->fop) &&
+                    cmpxchg(&dir->v_inode, NULL, (struct inode *)-1L) == NULL) {
+                    dir->rcu.next = retired;
+                    retired = &dir->rcu;
+                }
+            }
+        }
+        rcu_read_unlock();
+
         synchronize_rcu(); synchronize_srcu(&nomount_srcu);
+        while ((head = retired)) {
+            retired = head->next;
+            kfree(head);
+        }
         nm_art_free_tree(old_art_root);
         list_for_each_entry_safe(rule, n, &r_victims, list_node) nm_free_rule(rule);
     }
