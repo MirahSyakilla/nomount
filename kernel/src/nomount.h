@@ -43,6 +43,9 @@ DEFINE_STATIC_SRCU(nomount_srcu);
 #define nm_get_rpath(rule) ((rule)->paths + (rule)->v_len + 1)
 #define nm_get_child_name(rule) (nm_get_vpath(rule) + (rule)->v_len - (rule)->child_len)
 #define nm_get_child_rules(array) ((struct nomount_rule **)((array)->hashes + (array)->capacity))
+#define nm_children_is_single(children) ((unsigned long)(children) & 1UL)
+#define nm_children_single_rule(children) ((struct nomount_rule *)((unsigned long)(children) & ~1UL))
+#define nm_children_from_single(rule) ((void *)((unsigned long)(rule) | 1UL))
 #define nm_dir_tag(dir_node) READ_ONCE((dir_node)->_tag_ptr)
 #define nm_dir_is_virtual(dir_node) (nm_dir_tag((dir_node)) & 1UL)
 #define nm_dir_set_owner(dir_node, owner) WRITE_ONCE((dir_node)->_tag_ptr, (unsigned long)(owner) | 1UL)
@@ -94,7 +97,7 @@ struct nomount_child_array {
 
 struct nomount_dir_node {
     struct rcu_head rcu;
-    struct nomount_child_array __rcu *children;
+    void __rcu *children;
     u64 bloom_mask;
     struct inode *v_inode;
     union {
