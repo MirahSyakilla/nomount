@@ -1369,9 +1369,9 @@ static void __nomount_clear_all(int clear_flags)
         }
     }
     if (clear_flags & NM_CLEAR_RULES) {
-        void *old_art_root = rcu_dereference_protected(nomount_art_root, lockdep_is_held(&nomount_rwsem));
+        void *old_art_root = nomount_art_root;
         list_for_each_entry_safe(rule, n, &nomount_rules_list, list_node) nm_detach_rule_locked(rule, &r_victims, false);
-        RCU_INIT_POINTER(nomount_art_root, NULL);
+        nomount_art_root = NULL;
         synchronize_rcu(); synchronize_srcu(&nomount_srcu);
         nm_art_free_tree(old_art_root);
         list_for_each_entry_safe(rule, n, &r_victims, list_node) nm_free_rule(rule);
