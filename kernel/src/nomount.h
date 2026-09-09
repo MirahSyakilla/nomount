@@ -153,7 +153,7 @@ static const struct inode_operations nm_dir_iops;
 static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags);
 static int nomount_hijacked_iterate_dir(struct file *file, struct dir_context *ctx);
 static void nomount_hijacked_destroy_inode(struct inode *inode);
-static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry);
+static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry, bool injected);
 static void nm_free_rule(struct nomount_rule *rule);
 
 /* =====================================================================

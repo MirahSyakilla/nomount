@@ -272,7 +272,7 @@ resolve_rule:
         goto unlock_out;
 
     if (rule_info.flags & NM_FLAG_WHITEOUT) {
-        nomount_hijack_dentry_ops(dir, dentry);
+        nomount_hijack_dentry_ops(dir, dentry, true);
         d_add(dentry, NULL); res = NULL;
         goto unlock_out;
     }
@@ -290,7 +290,7 @@ resolve_rule:
 
         rcu_read_unlock();
         if (!IS_ERR((res = d_splice_alias(splice_inode, dentry))))
-            nomount_hijack_dentry_ops(dir, res ? res : dentry);
+            nomount_hijack_dentry_ops(dir, res ? res : dentry, true);
             
         goto cleanup_out;
     }
@@ -338,7 +338,7 @@ do_real_lookup:
                 if (!IS_ERR(target)) d_drop(target);
             }
         }
-        if (!IS_ERR(res ? res : dentry)) nomount_hijack_dentry_ops(dir, res ? res : dentry);
+        if (!IS_ERR(res ? res : dentry)) nomount_hijack_dentry_ops(dir, res ? res : dentry, false);
         return res;
     }
     return ERR_PTR(-EOPNOTSUPP);
@@ -684,14 +684,14 @@ static struct dentry *nm_dir_lookup(struct inode *dir, struct dentry *dentry, un
         struct inode *r_dir = d_backing_inode(info->r_path.dentry);
         if (r_dir->i_op->lookup) {
             res = r_dir->i_op->lookup(r_dir, dentry, flags);
-            if (!IS_ERR(res ? res : dentry)) nomount_hijack_dentry_ops(dir, res ? res : dentry);
+            if (!IS_ERR(res ? res : dentry)) nomount_hijack_dentry_ops(dir, res ? res : dentry, false);
             return res;
         }
     }
     return ERR_PTR(-EOPNOTSUPP);
 
 negative_dentry:
-    nomount_hijack_dentry_ops(dir, dentry);
+    nomount_hijack_dentry_ops(dir, dentry, true);
     d_add(dentry, NULL);
     return NULL;
 }
@@ -933,7 +933,7 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
     if (nm_iop || nm_fop) nm_debug("Successfully hijacked VFS ops for parent dir (ino: %lu)\n", (unsigned long)inode->i_ino);
 }
 
-static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry)
+static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry, bool injected)
 {
     static const struct dentry_operations nm_dops = { .d_revalidate = nm_d_revalidate };
     const struct dentry_operations *orig, *current_orig;
@@ -964,7 +964,9 @@ static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry)
         dentry->d_op = &nm_dops;
     }
 
-    dentry->d_flags |= (DCACHE_OP_REVALIDATE | DCACHE_DONTCACHE);
+    if (injected)
+        dentry->d_flags |= (DCACHE_OP_REVALIDATE | DCACHE_DONTCACHE);
+
     spin_unlock(&dentry->d_lock);
 }
 
