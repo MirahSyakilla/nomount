@@ -930,7 +930,7 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
         }
     }
 
-    if (nm_iop || nm_fop) nm_debug("Successfully hijacked VFS ops for parent dir (ino: %lu)\n", inode->i_ino);
+    if (nm_iop || nm_fop) nm_debug("Successfully hijacked VFS ops for parent dir (ino: %lu)\n", (unsigned long)inode->i_ino);
 }
 
 static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry)

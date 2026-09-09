@@ -32,7 +32,7 @@
 #define nm_err(fmt, ...)  printk(KERN_ERR "NoMount: [ERROR] " fmt, ##__VA_ARGS__)
 
 static void *nomount_art_root = NULL;
-struct nm_uid_array __rcu *nomount_uids = NULL;
+static struct nm_uid_array __rcu *nomount_uids = NULL;
 static LIST_HEAD(nomount_rules_list);
 static LIST_HEAD(nomount_sb_list);
 static DECLARE_RWSEM(nomount_rwsem);
