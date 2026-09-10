@@ -1205,6 +1205,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     viewLoadState['view-home'] = true;
     loadHome();
     document.body.classList.remove('loading');
+    if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => ensureAppsCache(true));
+    } else {
+        setTimeout(() => ensureAppsCache(true), 200);
+    }
 
     try {
         if (!viewLoadState['view-modules']) loadModules();
