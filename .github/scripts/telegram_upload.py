@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import html
 
 zip_path = os.environ.get("ZIP_PATH")
 if not zip_path or not os.path.exists(zip_path):
@@ -11,33 +12,30 @@ token = os.environ["BOT_TOKEN"]
 chat_id = os.environ["CHAT_ID"]
 topic_id = os.environ.get("TOPIC_ID", "")
 msg = os.environ.get("COMMIT_MESSAGE", "Manual build dispatch").split('\n')[0].strip()
-commit_url = os.environ.get("COMMIT_URL", f"https://github.com/{os.environ['GITHUB_REPOSITORY']}")
+commit_url = os.environ.get("COMMIT_URL", f"https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}")
 run_url = os.environ["RUN_URL"]
 run_number = os.environ["RUN_NUMBER"]
 branch = os.environ.get("GITHUB_REF_NAME", "unknown")
 
-MD_CHARS = '_*[]()~`>#+-=|{}.!'
-ESCAPE_MD_MAP = {ord(c): f'\\{c}' for c in MD_CHARS}
-ESCAPE_CODE_MAP = {ord('\\'): '\\\\', ord('`'): '\\`'}
-
 title = f"NoMount CI Build ({branch} branch)"
-run_text = f"\\#ci\\_{run_number}"
+run_text = f"#ci_{run_number}"
 
-escaped_title = title.translate(ESCAPE_MD_MAP)
-escaped_msg = msg.translate(ESCAPE_CODE_MAP)
+if len(msg) > 800:
+    msg = msg[:797] + "..."
 
-caption = f"*{escaped_title}*\n{run_text}\n```text\n{escaped_msg}\n```\n[Commit]({commit_url}) \\| [Workflow]({run_url})"
-if len(caption) > 1024:
-    caption = caption[:1015] + "...\n```"
-
-url_telegram = f"https://api.telegram.org/bot{token}/sendDocument"
+caption = (
+    f"<b>{html.escape(title)}</b>\n"
+    f"{html.escape(run_text)}\n"
+    f"<pre>{html.escape(msg)}</pre>\n"
+    f"<a href=\"{commit_url}\">Commit</a> | <a href=\"{run_url}\">Workflow</a>"
+)
 
 curl_cmd = [
     "curl", "-sS", "-X", "POST",
-    url_telegram,
+    f"https://api.telegram.org/bot{token}/sendDocument",
     "-F", f"chat_id={chat_id}",
-    "-F", f"caption={caption}",
-    "-F", "parse_mode=MarkdownV2",
+    "--form-string", f"caption={caption}",
+    "-F", "parse_mode=HTML",
     "-F", f"document=@{zip_path}"
 ]
 
