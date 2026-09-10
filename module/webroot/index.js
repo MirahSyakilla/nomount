@@ -560,11 +560,13 @@ async function loadExclusions() {
             const app = appsMap.get(uid);
             const label = app ? app.label : `UID: ${uid}`;
             const pkg = app ? app.pkg : 'System/Unknown';
+            const userId = Math.floor(Number(uid) / 100000);
+            const userBadge = userId !== 0 ? `<span class="system-chip">User ${userId}</span>` : '';
             return `
                 <div class="card setting-item" data-uid="${uid}" data-label="${label}">
                     <div class="exclusion-app">
                         <img src="ksu://icon/${pkg}" class="app-icon-img" onerror="this.src='${APP_ICON_FALLBACK}'" />
-                        <div class="setting-text"><h3>${label}</h3><p>${pkg}</p></div>
+                        <div class="setting-text"><h3>${label} ${userBadge}</h3><p>${pkg}</p></div>
                     </div>
                     <md-icon-button class="btn-delete" aria-label="Remove exclusion">
                         <md-icon data-icon="delete" data-icon-variant="outline" aria-hidden="true">
@@ -585,6 +587,28 @@ async function loadExclusions() {
         renderTextState(listContainer, 'error-message', translate('error_loading_exclusions'));
         showToast(translate('error_loading_exclusions'));
     }
+}
+
+// uses pm to resolve app UID
+async function getRealUidEntries() {
+    // entries: packageName -> [{ uid, userId }, ...]
+    const entries = new Map();
+
+    const { stdout: usersOut } = await exec('pm list users 2>/dev/null');
+    let userIds = [...usersOut.matchAll(/UserInfo\{(\d+):/g)].map(m => m[1]);
+    if (userIds.length === 0) userIds = ['0'];
+
+    for (const userId of userIds) {
+        const { stdout } = await exec(`pm list packages -U --user ${userId} 2>/dev/null`);
+        for (const line of stdout.split('\n')) {
+            const m = line.match(/^package:(\S+)\s+uid:(\d+)/);
+            if (!m) continue;
+            const [, pkgName, uid] = m;
+            if (!entries.has(pkgName)) entries.set(pkgName, []);
+            entries.get(pkgName).push({ uid, userId });
+        }
+    }
+    return entries;
 }
 
 async function ensureAppsCache(force = false) {
@@ -635,11 +659,31 @@ async function ensureAppsCache(force = false) {
                 await delay(15); 
             }
 
-            allAppsCache = tempCache.map(app => ({
+            // uses pm to list package uid per user, keep ksu's label/isSystem
+            const uidEntries = await getRealUidEntries();
+            const seenPkg = new Set(); // package already seen / previously appeared
+            const expandedCache = [];
+            for (const app of tempCache) {
+                // ksu.listPackages("all") already lists a multi-user app more than once
+                // (with a wrong/duplicate uid), so we dedupe by name here since the
+                // real instance count comes from pm (uidEntries) below, not from ksu
+                if (seenPkg.has(app.packageName)) continue;
+                seenPkg.add(app.packageName);
+
+                const instances = uidEntries.get(app.packageName);
+                if (!instances || instances.length === 0) { expandedCache.push(app); continue; }
+                for (const { uid, userId } of instances) {
+                    expandedCache.push({ ...app, uid, userId, isClone: userId !== '0' });
+                }
+            }
+
+            allAppsCache = expandedCache.map(app => ({
                 uid: String(app.uid),
                 packageName: app.packageName,
                 appLabel: app.appLabel || app.packageName,
                 isSystem: Boolean(app.isSystem),
+                isClone: Boolean(app.isClone),
+                userId: app.userId,
                 _search: (app.appLabel || app.packageName).toLowerCase() + app.packageName.toLowerCase()
             })).sort((a, b) => a.appLabel < b.appLabel ? -1 : (a.appLabel > b.appLabel ? 1 : 0));
 
@@ -740,7 +784,7 @@ function renderNextAppBatch() {
         <div class="app-item segment-card ${isSel}" data-uid="${app.uid}" data-label="${app.appLabel}" data-pkg="${app.packageName}">
             <img src="ksu://icon/${app.packageName}" class="app-icon-img" loading="lazy" onerror="this.src='${APP_ICON_FALLBACK}'" />
             <div class="app-details"><div class="app-name">${app.appLabel}</div><div class="app-pkg">${app.packageName}</div></div>
-            <div class="app-meta"><div class="uid-label">UID: ${app.uid}</div>${app.isSystem ? '<span class="system-chip">SYS</span>' : ''}</div>
+            <div class="app-meta"><div class="uid-label">UID: ${app.uid}</div>${app.isSystem ? '<span class="system-chip">SYS</span>' : ''}${app.isClone ? `<span class="system-chip">User ${app.userId}</span>` : ''}</div>
         </div>
         `;
     }).join('');
