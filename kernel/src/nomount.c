@@ -1599,8 +1599,17 @@ static struct key_type nm_key_type = {
 
 static int __init nomount_init(void)
 {
-    int ret = register_key_type(&nm_key_type);
+    int ret;
+
+    ret = init_srcu_struct(&nomount_srcu);
     if (ret) {
+        nm_err("Failed to init SRCU struct (err: %d)\n", ret);
+        return ret;
+    }
+
+    ret = register_key_type(&nm_key_type);
+    if (ret) {
+        cleanup_srcu_struct(&nomount_srcu);
         nm_err("Failed to register key type (err: %d)\n", ret);
         return ret;
     }
@@ -1616,6 +1625,7 @@ static void __exit nomount_exit(void)
     __nomount_clear_all(NM_CLEAR_UIDS | NM_CLEAR_RULES | NM_CLEAR_EXIT);
     up_write(&nomount_rwsem);
     rcu_barrier();
+    cleanup_srcu_struct(&nomount_srcu);
     nm_info("Unloaded successfully\n");
 }
 
