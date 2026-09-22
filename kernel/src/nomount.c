@@ -236,15 +236,10 @@ static inline void nomount_emit_virtual_children(struct dir_context *ctx, struct
 
 static void nomount_init_prealloc_inode(struct inode *inode, struct nm_inode_info *info, struct nm_rule_info *rule_info)
 {
-    struct inode *r_inode = NULL;
+    struct inode *r_inode = rule_info->r_path.dentry ? d_backing_inode(rule_info->r_path.dentry) : NULL;
     info->flags = rule_info->flags;
     info->dir_node = rule_info->this_dir;
-    if (rule_info->flags & NM_FLAG_VIRTUAL_DIR) {
-        info->r_path = (struct path){ .dentry = NULL, .mnt = NULL };
-    } else {
-        info->r_path = rule_info->r_path.dentry ? rule_info->r_path : (struct path){ .dentry = NULL, .mnt = NULL };
-        r_inode = info->r_path.dentry ? d_backing_inode(info->r_path.dentry) : NULL;
-    }
+    info->r_path = rule_info->r_path;
 
     inode->i_ino = rule_info->v_ino;
     inode->i_private = info;
