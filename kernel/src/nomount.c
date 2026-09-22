@@ -250,12 +250,27 @@ static struct dentry *nomount_resolve_rule_dentry(struct inode *dir, struct dent
     struct nm_rule_info rule_info = {0};
 
     rcu_read_lock();
-    if (!dir_node || !__nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, &rule_info, false))
+    if (!__nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, &rule_info, true))
         goto unlock_out;
-    if (rule_info.flags & NM_FLAG_WHITEOUT)
-        goto resolve_rule;
-    rcu_read_unlock();
 
+    if (unlikely(nomount_is_uid_blocked(current_fsuid().val)))
+        goto unlock_out;
+
+    if (rule_info.flags & NM_FLAG_WHITEOUT) {
+        nomount_hijack_dentry_ops(dir, dentry, true);
+        d_add(dentry, NULL); 
+        res = NULL;
+        goto unlock_out;
+    }
+
+    if (rule_info.this_dir && (splice_inode = smp_load_acquire(&rule_info.this_dir->v_inode))) {
+        if (splice_inode == (struct inode *)-1L) goto unlock_out;
+        igrab(splice_inode);
+        rcu_read_unlock();
+        goto do_splice;
+    }
+
+    rcu_read_unlock();
     if (likely((prealloc_inode = new_inode(dir->i_sb)))) {
         if (unlikely(!(prealloc_info = kmalloc(sizeof(*prealloc_info), GFP_KERNEL)))) {
             iput(prealloc_inode);
@@ -267,13 +282,13 @@ static struct dentry *nomount_resolve_rule_dentry(struct inode *dir, struct dent
     if (unlikely(!__nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, &rule_info, true)))
         goto unlock_out;
 
-resolve_rule:
     if (unlikely(nomount_is_uid_blocked(current_fsuid().val)))
         goto unlock_out;
 
-    if (rule_info.flags & NM_FLAG_WHITEOUT) {
+    if (unlikely(rule_info.flags & NM_FLAG_WHITEOUT)) {
         nomount_hijack_dentry_ops(dir, dentry, true);
-        d_add(dentry, NULL); res = NULL;
+        d_add(dentry, NULL); 
+        res = NULL;
         goto unlock_out;
     }
 
@@ -289,6 +304,7 @@ resolve_rule:
         }
 
         rcu_read_unlock();
+do_splice:
         if (!IS_ERR((res = d_splice_alias(splice_inode, dentry))))
             nomount_hijack_dentry_ops(dir, res ? res : dentry, true);
             
@@ -304,7 +320,7 @@ cleanup_out:
     if (prealloc_inode) {
         kfree(prealloc_info);
         iput(prealloc_inode);
-    }    
+    }   
     return res;
 }
 
@@ -314,29 +330,36 @@ static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *
 {
     struct nm_iop *nm_iop = nm_get_nm_iop(smp_load_acquire(&dir->i_op));
     struct nomount_dir_node *dir_node = nm_iop ? READ_ONCE(nm_iop->dir_node) : NULL;
-    bool is_blocked = nomount_is_uid_blocked(current_fsuid().val);
     struct dentry *res;
-    u32 hash = 0;
+    u32 hash;
 
-    if (unlikely(!nm_iop || !dir_node || is_blocked))
-        goto do_real_lookup;
+    if (unlikely(!nm_iop || !dir_node))
+        goto do_real_lookup_fast;
 
     hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, dentry->d_name.name, dentry->d_name.len);
     if (likely(!(READ_ONCE(dir_node->bloom_mask) & (1ULL << (hash & 63)))))
-        goto do_real_lookup;
+        goto do_real_lookup_fast;
+
+    if (unlikely(nomount_is_uid_blocked(current_fsuid().val)))
+        goto do_real_lookup_blocked;
 
     if ((res = nomount_resolve_rule_dentry(dir, dentry, dir_node, hash)) != ERR_PTR(-ENODATA))
         return res;
 
-do_real_lookup:
+do_real_lookup_fast:
     if (likely(nm_iop && nm_iop->orig_iop && nm_iop->orig_iop->lookup)) {
         res = nm_iop->orig_iop->lookup(dir, dentry, flags);
-        if (dir_node && !is_blocked) {
-            if (!hash) hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, dentry->d_name.name, dentry->d_name.len);
-            if (unlikely(nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, NULL, false))) {
-                struct dentry *target = res ? res : dentry;
-                if (!IS_ERR(target)) d_drop(target);
-            }
+        if (!IS_ERR(res ? res : dentry)) nomount_hijack_dentry_ops(dir, res ? res : dentry, false);
+        return res;
+    }
+    return ERR_PTR(-EOPNOTSUPP);
+
+do_real_lookup_blocked:
+    if (likely(nm_iop && nm_iop->orig_iop && nm_iop->orig_iop->lookup)) {
+        res = nm_iop->orig_iop->lookup(dir, dentry, flags);
+        if (unlikely(nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, NULL, false))) {
+            struct dentry *target = res ? res : dentry;
+            if (!IS_ERR(target)) d_drop(target);
         }
         if (!IS_ERR(res ? res : dentry)) nomount_hijack_dentry_ops(dir, res ? res : dentry, false);
         return res;
@@ -350,25 +373,30 @@ static int nomount_hijacked_iterate_dir(struct file *file, struct dir_context *c
     struct nomount_dir_node *dir_node = nm_fop ? READ_ONCE(nm_fop->dir_node) : NULL;
     const struct file_operations *orig_fop = nm_fop ? nm_fop->orig_fop : NULL;
     struct nomount_proxy_ctx proxy_ctx = { .ctx.actor = nomount_actor_proxy };
-    bool is_blocked = nomount_is_uid_blocked(current_fsuid().val);
     int res = 0;
+    bool is_blocked;
 
     if (unlikely(!orig_fop || !dir_node))
         goto do_real_iterate;
 
     if (unlikely(nm_is_virtual_pos(ctx->pos))) {
+        is_blocked = nomount_is_uid_blocked(current_fsuid().val);
         if (likely(!is_blocked)) nomount_emit_virtual_children(ctx, dir_node);
         return 0;
     }
 
-    if (unlikely(is_blocked || !READ_ONCE(dir_node->bloom_mask)))
+    if (likely(!READ_ONCE(dir_node->bloom_mask)))
+        goto do_real_iterate;
+
+    is_blocked = nomount_is_uid_blocked(current_fsuid().val);
+    if (unlikely(is_blocked))
         goto do_real_iterate;
 
     proxy_ctx.ctx.pos = ctx->pos;
     proxy_ctx.orig_ctx = ctx;
     proxy_ctx.dir_node = dir_node;
     proxy_ctx.emitted = false;
-    proxy_ctx.uid_blocked = is_blocked;
+    proxy_ctx.uid_blocked = false;
 
     res = nm_call_iterate(file, &proxy_ctx.ctx, orig_fop);
     ctx->pos = proxy_ctx.ctx.pos;
@@ -735,7 +763,7 @@ static int nm_d_revalidate(struct dentry *dentry, unsigned int flags)
     struct nm_rule_info rule_info;
     struct inode *inode;
     struct nm_iop *iop = NULL;
-    bool injected, has_rule = false, is_blocked;
+    bool injected, has_rule = false;
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 13, 0)
     struct inode *parent_inode = d_inode(READ_ONCE(dentry->d_parent));
@@ -752,14 +780,16 @@ static int nm_d_revalidate(struct dentry *dentry, unsigned int flags)
 
     inode = READ_ONCE(dentry->d_inode);
     injected = inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops);
-    is_blocked = nomount_is_uid_blocked(current_fsuid().val);
-
     if (parent_dir) {
         u32 hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name->name, name->len);
-        has_rule = nomount_get_rule_info(parent_dir, name->name, name->len, hash, &rule_info, false);
+        if (READ_ONCE(parent_dir->bloom_mask) & (1ULL << (hash & 63)))
+            has_rule = nomount_get_rule_info(parent_dir, name->name, name->len, hash, &rule_info, false);
     }
 
-    if (is_blocked) {
+    if (!injected && !has_rule)
+        goto orig_dops;
+
+    if (nomount_is_uid_blocked(current_fsuid().val)) {
         if (injected || (!inode && has_rule)) goto drop_it;
         goto orig_dops;
     }
