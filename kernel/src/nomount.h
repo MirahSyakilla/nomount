@@ -107,7 +107,6 @@ struct nomount_dir_node {
             struct nm_fop __rcu *fop;
         };
     };
-    seqcount_t seq;
 };
 
 struct nomount_rule {
