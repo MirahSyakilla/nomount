@@ -361,6 +361,9 @@ static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *
     if (unlikely(!nm_iop || !dir_node))
         goto do_real_lookup_fast;
 
+    if (likely(!READ_ONCE(dir_node->bloom_mask)))
+		goto do_real_lookup_fast;
+
     hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, dentry->d_name.name, dentry->d_name.len);
     if (likely(!(READ_ONCE(dir_node->bloom_mask) & (1ULL << (hash & 63)))))
         goto do_real_lookup_fast;
@@ -813,10 +816,13 @@ static int nm_d_revalidate(struct dentry *dentry, unsigned int flags)
     inode = READ_ONCE(dentry->d_inode);
     injected = inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops);
     if (parent_dir) {
-        u32 hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name->name, name->len);
-        if (READ_ONCE(parent_dir->bloom_mask) & (1ULL << (hash & 63)))
-            has_rule = nomount_get_rule_info(parent_dir, name->name, name->len, hash, &rule_info, false);
-    }
+		u64 mask = READ_ONCE(parent_dir->bloom_mask);
+		if (unlikely(mask)) {
+			u32 hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name->name, name->len);
+			if (mask & (1ULL << (hash & 63)))
+				has_rule = nomount_get_rule_info(parent_dir, name->name, name->len, hash, &rule_info, false);
+		}
+	}
 
     if (!injected && !has_rule)
         goto orig_dops;
