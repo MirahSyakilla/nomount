@@ -374,7 +374,11 @@ static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *
 do_real_lookup_fast:
     if (likely(nm_iop && nm_iop->orig_iop && nm_iop->orig_iop->lookup)) {
         res = nm_iop->orig_iop->lookup(dir, dentry, flags);
-        if (!IS_ERR(res ? res : dentry)) nomount_hijack_dentry_ops(dir, res ? res : dentry, false);
+        struct dentry *target = res ? res : dentry;
+        if (likely(!IS_ERR(target))) {
+            if (unlikely(READ_ONCE(target->d_op) != &nm_iop->fake_dops || !(READ_ONCE(target->d_flags) & DCACHE_OP_REVALIDATE)))
+                nomount_hijack_dentry_ops(dir, target, false);
+        }
         return res;
     }
     return ERR_PTR(-EOPNOTSUPP);
@@ -382,11 +386,14 @@ do_real_lookup_fast:
 do_real_lookup_blocked:
     if (likely(nm_iop && nm_iop->orig_iop && nm_iop->orig_iop->lookup)) {
         res = nm_iop->orig_iop->lookup(dir, dentry, flags);
+        struct dentry *target = res ? res : dentry;
         if (unlikely(nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, NULL, false))) {
-            struct dentry *target = res ? res : dentry;
             if (!IS_ERR(target)) d_drop(target);
         }
-        if (!IS_ERR(res ? res : dentry)) nomount_hijack_dentry_ops(dir, res ? res : dentry, false);
+        if (likely(!IS_ERR(target))) {
+            if (unlikely(READ_ONCE(target->d_op) != &nm_iop->fake_dops || !(READ_ONCE(target->d_flags) & DCACHE_OP_REVALIDATE)))
+                nomount_hijack_dentry_ops(dir, target, false);
+        }
         return res;
     }
     return ERR_PTR(-EOPNOTSUPP);
@@ -993,9 +1000,16 @@ static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry, 
     static const struct dentry_operations nm_dops = { .d_revalidate = nm_d_revalidate };
     const struct dentry_operations *orig, *current_orig;
     struct nm_iop *iop;
+    const struct dentry_operations *target_dops;
 
     if (!dentry || !dir) return;
     iop = nm_get_nm_iop(smp_load_acquire(&dir->i_op));
+    target_dops = iop ? &iop->fake_dops : &nm_dops;
+
+    if (likely(READ_ONCE(dentry->d_op) == target_dops && (READ_ONCE(dentry->d_flags) & DCACHE_OP_REVALIDATE))) {
+        if (!injected || (READ_ONCE(dentry->d_flags) & DCACHE_DONTCACHE))
+            return;
+    }
 
     spin_lock(&dentry->d_lock);
     orig = dentry->d_op;
