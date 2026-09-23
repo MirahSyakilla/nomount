@@ -13,6 +13,9 @@ static __always_inline bool nomount_is_uid_blocked(uid_t target_uid)
 {
     struct nm_uid_array *arr;
     bool blocked = false;
+
+    if (likely(!rcu_access_pointer(nomount_uids)))
+        return false;
     rcu_read_lock();
     if ((arr = rcu_dereference(nomount_uids))) {
         for (int i = 0; i < arr->count; i++) {
@@ -25,7 +28,6 @@ static __always_inline bool nomount_is_uid_blocked(uid_t target_uid)
     rcu_read_unlock();
     return blocked;
 }
-
 
 static __always_inline struct nomount_rule *nomount_bsearch_child(struct nomount_child_array *arr, const char *name, size_t len, u32 hash, int *index)
 {
@@ -278,9 +280,6 @@ static struct dentry *nomount_resolve_rule_dentry(struct inode *dir, struct dent
     if (!__nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, &rule_info, true))
         goto unlock_out;
 
-    if (unlikely(nomount_is_uid_blocked(current_fsuid().val)))
-        goto unlock_out;
-
     if (rule_info.flags & NM_FLAG_WHITEOUT) {
         nomount_hijack_dentry_ops(dir, dentry, true);
         d_add(dentry, NULL); 
@@ -305,9 +304,6 @@ static struct dentry *nomount_resolve_rule_dentry(struct inode *dir, struct dent
 
     rcu_read_lock();
     if (unlikely(!__nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, &rule_info, true)))
-        goto unlock_out;
-
-    if (unlikely(nomount_is_uid_blocked(current_fsuid().val)))
         goto unlock_out;
 
     if (unlikely(rule_info.flags & NM_FLAG_WHITEOUT)) {
@@ -732,6 +728,9 @@ static struct dentry *nm_dir_lookup(struct inode *dir, struct dentry *dentry, un
 {
     struct nm_inode_info *info = dir->i_private; 
     struct dentry *res;
+
+    if (unlikely(nomount_is_uid_blocked(current_fsuid().val)))
+		goto negative_dentry;
 
     if (info->dir_node) {
         u32 v_hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, dentry->d_name.name, dentry->d_name.len);
