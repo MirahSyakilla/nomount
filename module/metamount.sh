@@ -95,9 +95,8 @@ done
 
 echo "=== Injection Complete: $(date) ===" >> "$LOG_FILE"
 
-# NOTE: moved to boot-completed.sh
-# rm -f "$BOOT_SEMAPHORE"
-# echo "[OK] Boot phase completed safely." >> "$LOG_FILE"
+rm -f "$BOOT_SEMAPHORE"
+echo "[OK] Boot phase completed safely." >> "$LOG_FILE"
 sed -i "s|^description=.*|description=$BASE_DESC|" "$PROP_FILE"
 
 echo -e "\nCurrent files injected:" >> "$LOG_FILE"
