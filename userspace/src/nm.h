@@ -92,6 +92,8 @@ enum {
     NM_CMD_CLEAR_UIDS,
     NM_CMD_GET_LIST,
     NM_CMD_GET_UIDS,
+    NM_CMD_BLOCK_ISOLATED_UIDS,
+    NM_CMD_GET_ISOLATED_STATE,
 };
 
 enum nm_cli_action {
@@ -105,7 +107,8 @@ enum nm_cli_action {
     ACTION_UID_LIST,
     ACTION_UID_CLEAR,
     ACTION_CLEAR_ALL,
-    ACTION_VERSION
+    ACTION_VERSION,
+    ACTION_BLOCK_ISOLATED_UIDS,
 };
 
 struct nm_payload {

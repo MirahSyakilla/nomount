@@ -35,6 +35,7 @@ void c_main(long *sp) {
             else if (strcmp(c2, "del") == 0) action = ACTION_UID_DEL;
             else if (strcmp(c2, "list") == 0) action = ACTION_UID_LIST;
             else if (strcmp(c2, "clear") == 0) action = ACTION_UID_CLEAR;
+            else if (strcmp(c2, "block_isolated") == 0) action = ACTION_BLOCK_ISOLATED_UIDS;
             data_start_idx = 3;
         } else if (strcmp(c1, "clear") == 0) {
             if (argc >= 3 && strcmp(argv[2], "rules") == 0) action = ACTION_RULE_CLEAR;
@@ -144,6 +145,27 @@ void c_main(long *sp) {
             break;
         }
 
+        case ACTION_BLOCK_ISOLATED_UIDS: {
+            if (p_count == 0) {
+                payload->cmd = NM_CMD_GET_ISOLATED_STATE;
+                exit_code = (nm_send_payload(payload) < 0);
+                if (exit_code == 0 && payload->data_size > 0)
+                    print_strn(payload->buffer, payload->data_size);
+            } else {
+                payload->cmd = NM_CMD_BLOCK_ISOLATED_UIDS;
+                if (strcmp(argv[0], "on") == 0 || strcmp(argv[0], "1") == 0) {
+                    payload->arg1 = 1;
+                } else if (strcmp(argv[0], "off") == 0 || strcmp(argv[0], "0") == 0) {
+                    payload->arg1 = 0;
+                } else {
+                    exit_code = 1;
+                    goto do_exit;
+                }
+                exit_code = (nm_send_payload(payload) < 0);
+            }
+            break;
+        }
+
         case ACTION_CLEAR_ALL: {
             payload->cmd = NM_CMD_CLEAR_ALL;
             exit_code = (nm_send_payload(payload) < 0);
@@ -230,7 +252,7 @@ void c_main(long *sp) {
         default: {
             print_literal("Usage:\n"
                       "  nm rule {add, del, list, clear}\n"
-                      "  nm uid {add, del, list, clear}\n"
+                      "  nm uid {add, del, list, clear, block_isolated [on|off]}\n"
                       "  nm clear all\n");
             exit_code = 1;
             break;
