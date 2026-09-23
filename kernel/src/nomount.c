@@ -1093,7 +1093,7 @@ static int __nomount_inject_child_locked(struct nomount_dir_node *dir_node, stru
     rule->child_len = name_len;
     rule->parent_dir = dir_node;
     target_hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name, name_len);
-    children = rcu_dereference_protected(dir_node->children, lockdep_is_held(&nomount_rwsem));
+    children = rcu_dereference_protected(dir_node->children, lockdep_is_held(&nomount_mutex));
     single = nm_children_is_single(children) ? nm_children_single_rule(children) : NULL;
     old_arr = single ? NULL : children;
     if (!children || (single && single->child_len == name_len && !memcmp(nm_get_child_name(single), name, name_len))) {
@@ -1158,7 +1158,7 @@ static struct nomount_dir_node *__nomount_delete_child_locked(struct nomount_rul
     int old_count, target_idx = -1;
     u64 mask = 0;
 
-    if (unlikely(!dir_node || !(children = rcu_dereference_protected(dir_node->children, lockdep_is_held(&nomount_rwsem))))) return parent;
+    if (unlikely(!dir_node || !(children = rcu_dereference_protected(dir_node->children, lockdep_is_held(&nomount_mutex))))) return parent;
     single = nm_children_is_single(children) ? nm_children_single_rule(children) : NULL;
     old_arr = single ? NULL : children;
     rules = old_arr ? nm_get_child_rules(old_arr) : &single;
@@ -1413,7 +1413,7 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
     if (IS_ERR((rule = nm_alloc_rule(v_path, r_path, v_len, r_len, flags, target_uid))))
         return PTR_ERR(rule);
 
-    down_write(&nomount_rwsem);
+    mutex_lock(&nomount_mutex);
     hash_for_each_possible(nomount_rules_ht, existing, ht_node, rule->v_hash) {
         if (existing->target_uid == target_uid && existing->v_len == rule->v_len &&
                 !memcmp(nm_get_vpath(existing), nm_get_vpath(rule), rule->v_len))
@@ -1432,13 +1432,13 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
     }
 
     if ((err = nomount_generate_virtual_topology(rule)) != 0) {
-        up_write(&nomount_rwsem);
+        mutex_unlock(&nomount_mutex);
         nm_free_rule(rule);
         return err;
     }
 
     hash_add(nomount_rules_ht, &rule->ht_node, rule->v_hash);
-    up_write(&nomount_rwsem);
+    mutex_unlock(&nomount_mutex);
 
     (flags & NM_FLAG_WHITEOUT) ? nm_info("Successfully added whiteout rule: %s\n", nm_get_vpath(rule))
     : nm_info("Successfully added injection rule: %s -> %s\n", nm_get_vpath(rule), nm_get_rpath(rule));
@@ -1466,7 +1466,7 @@ static void __nomount_clear_all(int clear_flags)
 
     if (clear_flags & NM_CLEAR_UIDS) {
         struct nm_uid_array *old;
-        if ((old = rcu_dereference_protected(nomount_uids, lockdep_is_held(&nomount_rwsem)))) {
+        if ((old = rcu_dereference_protected(nomount_uids, lockdep_is_held(&nomount_mutex)))) {
             RCU_INIT_POINTER(nomount_uids, NULL);
             kfree_rcu(old, rcu);
         }
@@ -1535,7 +1535,7 @@ static int nm_process_payload(unsigned long user_addr)
         case NM_CMD_DEL_RULE: {
             HLIST_HEAD(r_victims);
             if (payload->data_size > sizeof(payload->buffer)) { payload->status = -EINVAL; break; }
-            down_write(&nomount_rwsem);
+            mutex_lock(&nomount_mutex);
             while ((size_t)(buf_end - buf_ptr) >= sizeof(struct nm_del_hdr)) {
                 struct nm_del_hdr *h = (void *)buf_ptr;
                 buf_ptr += sizeof(*h);
@@ -1543,7 +1543,7 @@ static int nm_process_payload(unsigned long user_addr)
                 __nomount_del_rule(buf_ptr, h->v_len, h->uid, &r_victims);
                 buf_ptr += h->v_len;
             }
-            up_write(&nomount_rwsem);
+            mutex_unlock(&nomount_mutex);
             payload->arg1 = buf_ptr - payload->buffer;
 
             if (!hlist_empty(&r_victims)) {
@@ -1556,24 +1556,24 @@ static int nm_process_payload(unsigned long user_addr)
         }
 
         case NM_CMD_ADD_UID:
-            down_write(&nomount_rwsem);
+            mutex_lock(&nomount_mutex);
             payload->status = nm_uid_add(payload->target_uid);
-            up_write(&nomount_rwsem);
+            mutex_unlock(&nomount_mutex);
             break;
 
         case NM_CMD_DEL_UID:
-            down_write(&nomount_rwsem);
+            mutex_lock(&nomount_mutex);
             payload->status = nm_uid_del(payload->target_uid);
-            up_write(&nomount_rwsem);
+            mutex_unlock(&nomount_mutex);
             break;
 
         case NM_CMD_CLEAR_ALL:
         case NM_CMD_CLEAR_UIDS:
         case NM_CMD_CLEAR_RULES:
-            down_write(&nomount_rwsem);
+            mutex_lock(&nomount_mutex);
             __nomount_clear_all((payload->cmd == NM_CMD_CLEAR_ALL) ? (NM_CLEAR_UIDS | NM_CLEAR_RULES) :
                                 (payload->cmd == NM_CMD_CLEAR_UIDS) ? NM_CLEAR_UIDS : NM_CLEAR_RULES);
-            up_write(&nomount_rwsem);
+            mutex_unlock(&nomount_mutex);
             break;
 
         case NM_CMD_GET_LIST: {
@@ -1655,9 +1655,9 @@ static int __init nomount_init(void)
 static void __exit nomount_exit(void)
 {
     unregister_key_type(&nm_key_type);
-    down_write(&nomount_rwsem);
+    mutex_lock(&nomount_mutex);
     __nomount_clear_all(NM_CLEAR_UIDS | NM_CLEAR_RULES | NM_CLEAR_EXIT);
-    up_write(&nomount_rwsem);
+    mutex_unlock(&nomount_mutex);
     rcu_barrier();
     nm_info("Unloaded successfully\n");
 }

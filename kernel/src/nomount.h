@@ -33,8 +33,8 @@
 
 static struct nm_uid_array __rcu *nomount_uids = NULL;
 static DEFINE_HASHTABLE(nomount_rules_ht, 12);
+static DEFINE_MUTEX(nomount_mutex);
 static LIST_HEAD(nomount_sb_list);
-static DECLARE_RWSEM(nomount_rwsem);
 
 /* * Helpers to dynamically calculate the memory address of the strings / structs */
 #define nm_get_vpath(rule) ((rule)->paths)
@@ -185,7 +185,7 @@ static inline int nm_uid_add(uid_t target)
 {
     struct nm_uid_array *old, *new_arr;
     int count = 0;
-    if ((old = rcu_dereference_protected(nomount_uids, lockdep_is_held(&nomount_rwsem)))) {
+    if ((old = rcu_dereference_protected(nomount_uids, lockdep_is_held(&nomount_mutex)))) {
         for (int i = 0; i < (count = old->count); i++) if (old->uids[i] == target) return -EEXIST;
     }
 
@@ -203,7 +203,7 @@ static inline int nm_uid_del(uid_t target)
     struct nm_uid_array *old, *new_arr = NULL;
     int count, target_idx = -1;
 
-    if (!(old = rcu_dereference_protected(nomount_uids, lockdep_is_held(&nomount_rwsem)))) return -ENOENT;
+    if (!(old = rcu_dereference_protected(nomount_uids, lockdep_is_held(&nomount_mutex)))) return -ENOENT;
     for (int i = 0; i < (count = old->count); i++) if (old->uids[i] == target) { target_idx = i; break; }
     if (target_idx < 0) return -ENOENT;
 
