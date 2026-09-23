@@ -478,7 +478,11 @@ async function loadModule(modId) {
         [ -z "$valid_dirs" ] && exit 0
         find -L $valid_dirs \\( -type d -o -type c -o -name ".replace" \\) -exec sh -c '
             for f do
-                v="$f"; [ "\${v#system/odm/}" != "$v" ] && v="odm/\${v#system/odm/}"
+                v="$f"
+                case "$v" in system/*)
+                    p="\${v#system/}"; p="\${p%%/*}"
+                    case "$p" in vendor|system_ext|product|odm|apex|oem|optics|prism|mi_ext|my_*) v="$p\${v#system/$p}" ;; esac
+                ;; esac
                 if [ -d "$f" ]; then
                     getfattr -n trusted.overlay.opaque "$f" 2>/dev/null | grep -q "=\\"y\\"" && printf "/%s\\0" "$v"
                 elif [ "\${f##*/}" = ".replace" ]; then
@@ -492,7 +496,11 @@ async function loadModule(modId) {
         find -L $valid_dirs  \\( -type f -o -type l \\) ! -name ".replace" -exec sh -c '
             mod="$1"; shift
             for f do
-                v="$f"; [ "\${v#system/odm/}" != "$v" ] && v="odm/\${v#system/odm/}"
+                v="$f"
+                case "$v" in system/*)
+                    p="\${v#system/}"; p="\${p%%/*}"
+                    case "$p" in vendor|system_ext|product|odm|apex|oem|optics|prism|mi_ext|my_*) v="$p\${v#system/$p}" ;; esac
+                ;; esac
                 printf "/%s\\0%s/%s\\0" "$v" "$mod" "$f"
             done
         ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r ${NM_BIN} rule add
@@ -509,7 +517,11 @@ async function unloadModule(modId) {
         [ -z "$valid_dirs" ] && exit 0
         find -L $valid_dirs \\( -type f -o -type l -o -type c -o -type d \\) -exec sh -c '
             for f do
-                v="$f"; [ "\${v#system/odm/}" != "$v" ] && v="odm/\${v#system/odm/}"
+                v="$f"
+                case "$v" in system/*)
+                    p="\${v#system/}"; p="\${p%%/*}"
+                    case "$p" in vendor|system_ext|product|odm|apex|oem|optics|prism|mi_ext|my_*) v="$p\${v#system/$p}" ;; esac
+                ;; esac
                 if [ -d "$f" ]; then
                     getfattr -n trusted.overlay.opaque "$f" 2>/dev/null | grep -q "=\\"y\\"" && printf "/%s\\0" "$v"
                 elif [ "\${f##*/}" = ".replace" ]; then
