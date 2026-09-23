@@ -17,6 +17,8 @@
   "model_label": "Modelo",
   "detailed_logging": "Registro detallado",
   "detailed_logging_desc": "Escribe salida detallada en nomount.log",
+  "block_isolated_uids": "Bloquear UIDs Aislados",
+  "block_isolated_uids_desc": "Omite la redirección para los procesos aislados de Android (UIDs 90000-99999).",
   "safe_mode": "Modo seguro",
   "safe_mode_desc": "Deshabilita la inyección en el próximo arranque",
   "clear_rules": "Borrar todas las reglas",

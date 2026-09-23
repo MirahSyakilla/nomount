@@ -17,6 +17,8 @@
   "model_label": "モデル",
   "detailed_logging": "詳細ログ",
   "detailed_logging_desc": "詳細なログを nomount.log に出力します",
+  "block_isolated_uids": "Block Isolated UIDs",
+  "block_isolated_uids_desc": "Bypass redirection for Android isolated processes (UIDs 90000-99999).",
   "safe_mode": "セーフモード",
   "safe_mode_desc": "次回起動時にモジュールのインジェクションを無効にします",
   "clear_rules": "すべてのルールを消去",

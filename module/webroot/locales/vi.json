@@ -17,6 +17,8 @@
   "model_label": "Thiết bị",
   "detailed_logging": "Nhật ký chi tiết",
   "detailed_logging_desc": "Lưu nhật ký chi tiết vào nomount.log",
+  "block_isolated_uids": "Block Isolated UIDs",
+  "block_isolated_uids_desc": "Bypass redirection for Android isolated processes (UIDs 90000-99999).",
   "safe_mode": "Chế độ an toàn",
   "safe_mode_desc": "Vô hiệu hóa tiêm mã vào lần khởi động tiếp theo",
   "clear_rules": "Xóa tất cả quy tắc",

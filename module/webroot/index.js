@@ -137,7 +137,7 @@ function renderLanguagePicker() {
 const MOD_DIR = "/data/adb/modules";
 const NM_DATA = "/data/adb/nomount";
 const NM_BIN = "/data/adb/modules/nomount/bin/nm";
-const FILES = { disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list.json` };
+const FILES = { disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list.json`, isolated: `${NM_DATA}/.block_isolated_uids` };
 const APP_ICON_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzgwODA4MCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIvPjwvc3ZnPg==";
 const viewLoadState = { 'view-home': false, 'view-modules': false, 'view-exclusions': false, 'view-options': false };
 
@@ -842,11 +842,29 @@ async function addExclusion(uid, label, pkg) {
 // Options
 async function loadOptions() {
     const swSafe = document.querySelector('#setting-safemode input'),
+          swIso = document.querySelector('#setting-isolated input'),
+          swIsoCard = document.getElementById('setting-isolated-card'),
           btnClear = document.getElementById('btn-clear-rules');
 
     if (swSafe) {
         swSafe.checked = (await exec(`[ -f ${FILES.disable} ] && echo yes`)).stdout.includes('yes');
         swSafe.onchange = e => exec(e.target.checked ? `touch ${FILES.disable}` : `rm ${FILES.disable}`);
+    }
+
+    if (swIso && swIsoCard) {
+        const isoCheck = await exec(`${NM_BIN} uid block_isolated`);
+        const out = isoCheck.stdout.trim();
+        if (isoCheck.errno === 0 && (out === '1' || out === '0')) {
+            swIsoCard.style.display = '';
+            swIso.checked = (out === '1');
+            swIso.onchange = async (e) => {
+                const isChecked = e.target.checked;
+                swIsoCard.dataset.busy = 'true';
+                await exec(`${NM_BIN} uid block_isolated ${isChecked ? 'on' : 'off'}`);
+                await exec(isChecked ? `touch ${FILES.isolated}` : `rm ${FILES.isolated}`);
+                delete swIsoCard.dataset.busy;
+            };
+        }
     }
 
     if (btnClear) {

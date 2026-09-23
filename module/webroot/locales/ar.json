@@ -17,6 +17,8 @@
   "model_label": "الطراز",
   "detailed_logging": "السجل التفصيلي",
   "detailed_logging_desc": "كتابة مخرجات تفصيلية إلى nomount.log",
+  "block_isolated_uids": "Block Isolated UIDs",
+  "block_isolated_uids_desc": "Bypass redirection for Android isolated processes (UIDs 90000-99999).",
   "safe_mode": "الوضع الآمن",
   "safe_mode_desc": "تعطيل الحقن عند إعادة التشغيل التالية",
   "clear_rules": "مسح جميع القواعد",

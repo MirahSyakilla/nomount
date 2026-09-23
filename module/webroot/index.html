@@ -94,6 +94,19 @@
                 <div class="header-title" data-i18n="nav_options">Settings</div>
                 
                 <div class="settings-segment-group">
+                    <div class="segment-card setting-item" id="setting-isolated-card" style="display: none;">
+                        <div class="setting-text">
+                            <h3 data-i18n="block_isolated_uids">Block Isolated UIDs</h3>
+                            <p data-i18n="block_isolated_uids_desc">Bypass redirection for Android isolated processes (UIDs 90000-99999).</p>
+                        </div>
+                        <label class="custom-switch" id="setting-isolated">
+                            <input type="checkbox" class="switch-input" aria-label="Block Isolated UIDs">
+                            <span class="switch-track">
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+
                     <div class="segment-card setting-item">
                         <div class="setting-text">
                             <h3 data-i18n="safe_mode">Safe Mode</h3>

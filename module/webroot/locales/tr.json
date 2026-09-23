@@ -17,6 +17,8 @@
   "model_label": "Model",
   "detailed_logging": "Detaylı Günlükleme",
   "detailed_logging_desc": "nomount.log dosyasına ayrıntılı çıktı yaz",
+  "block_isolated_uids": "Block Isolated UIDs",
+  "block_isolated_uids_desc": "Bypass redirection for Android isolated processes (UIDs 90000-99999).",
   "safe_mode": "Güvenli Mod",
   "safe_mode_desc": "Bir sonraki önyüklemede enjeksiyonu devre dışı bırak",
   "clear_rules": "Tüm kuralları temizle",

@@ -17,6 +17,8 @@
   "model_label": "মডেল",
   "detailed_logging": "বিস্তারিত লগিং",
   "detailed_logging_desc": "nomount.log ফাইলে বিস্তারিত আউটপুট লিখুন",
+  "block_isolated_uids": "Block Isolated UIDs",
+  "block_isolated_uids_desc": "Bypass redirection for Android isolated processes (UIDs 90000-99999).",
   "safe_mode": "সেফ মোড",
   "safe_mode_desc": "পরবর্তী বুটে ইনজেকশন নিষ্ক্রিয় করুন",
   "clear_rules": "সব নিয়ম মুছে ফেলুন",

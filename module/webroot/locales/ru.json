@@ -17,6 +17,8 @@
   "model_label": "Модель",
   "detailed_logging": "Подробное логирование",
   "detailed_logging_desc": "Записывать подробный вывод в nomount.log",
+  "block_isolated_uids": "Block Isolated UIDs",
+  "block_isolated_uids_desc": "Bypass redirection for Android isolated processes (UIDs 90000-99999).",
   "safe_mode": "Безопасный режим",
   "safe_mode_desc": "Выключить инъекцию на следующий запуск",
   "clear_rules": "Очистить все правила",

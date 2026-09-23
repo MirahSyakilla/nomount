@@ -17,6 +17,8 @@
   "model_label": "机型",
   "detailed_logging": "详细日志",
   "detailed_logging_desc": "nomount.log 包含详细内容",
+  "block_isolated_uids": "Block Isolated UIDs",
+  "block_isolated_uids_desc": "Bypass redirection for Android isolated processes (UIDs 90000-99999).",
   "safe_mode": "安全模式",
   "safe_mode_desc": "下次开机后禁用所有注入",
   "clear_rules": "清除所有规则",

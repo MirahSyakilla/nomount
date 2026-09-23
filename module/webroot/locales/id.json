@@ -17,6 +17,8 @@
   "model_label": "Model",
   "detailed_logging": "Pencatatan Log Detail",
   "detailed_logging_desc": "Tulis output verbose ke nomount.log",
+  "block_isolated_uids": "Block Isolated UIDs",
+  "block_isolated_uids_desc": "Bypass redirection for Android isolated processes (UIDs 90000-99999).",
   "safe_mode": "Mode Aman",
   "safe_mode_desc": "Nonaktifkan injeksi pada boot berikutnya",
   "clear_rules": "Bersihkan semua aturan",
