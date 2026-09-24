@@ -798,6 +798,11 @@ static int nm_d_revalidate_common(struct inode *parent_inode, const struct qstr 
     if (unlikely(!parent_inode)) return 1;
 
     owned = (READ_ONCE(dentry->d_op) == &nm_owned_dops) || (inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops));
+    if (unlikely(nomount_is_uid_blocked(current_fsuid().val))) {
+        if (owned) goto drop_it;
+        goto orig_dops;
+    }
+
     if (parent_inode->i_op == &nm_dir_iops) {
         parent_dir = ((struct nm_inode_info *)parent_inode->i_private)->dir_node;
     } else if ((iop = nm_get_nm_iop(smp_load_acquire(&parent_inode->i_op)))) {
@@ -811,11 +816,6 @@ static int nm_d_revalidate_common(struct inode *parent_inode, const struct qstr 
             if (mask & (1ULL << (hash & 63)))
                 has_rule = nomount_get_rule_info(parent_dir, name->name, name->len, hash, &rule_info, false);
         }
-    }
-
-    if (nomount_is_uid_blocked(current_fsuid().val)) {
-        if (owned) goto drop_it;
-        goto orig_dops;
     }
 
     if (has_rule) {
