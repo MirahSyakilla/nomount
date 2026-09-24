@@ -278,7 +278,7 @@ static struct dentry *nomount_resolve_rule_dentry(struct inode *dir, struct dent
     struct nm_rule_info rule_info = {0};
 
     rcu_read_lock();
-    if (!__nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, &rule_info, true))
+    if (!__nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, &rule_info, false))
         goto unlock_out;
 
     if (rule_info.flags & NM_FLAG_WHITEOUT) {
