@@ -356,40 +356,25 @@ static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *
     u32 hash;
 
     if (unlikely(!nm_iop || !dir_node))
-        goto do_real_lookup_fast;
+        goto do_real_lookup;
 
     if (likely(!READ_ONCE(dir_node->bloom_mask)))
-		goto do_real_lookup_fast;
+        goto do_real_lookup;
 
     hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, dentry->d_name.name, dentry->d_name.len);
     if (likely(!(READ_ONCE(dir_node->bloom_mask) & (1ULL << (hash & 63)))))
-        goto do_real_lookup_fast;
+        goto do_real_lookup;
 
     if (unlikely(nomount_is_uid_blocked(current_fsuid().val)))
-        goto do_real_lookup_blocked;
+        goto do_real_lookup;
 
     if ((res = nomount_resolve_rule_dentry(dir, dentry, dir_node, hash)) != ERR_PTR(-ENODATA))
         return res;
 
-do_real_lookup_fast:
+do_real_lookup:
     if (likely(nm_iop && nm_iop->orig_iop && nm_iop->orig_iop->lookup)) {
         res = nm_iop->orig_iop->lookup(dir, dentry, flags);
         struct dentry *target = res ? res : dentry;
-        if (likely(!IS_ERR(target))) {
-            if (unlikely(READ_ONCE(target->d_op) != &nm_iop->fake_dops || !(READ_ONCE(target->d_flags) & DCACHE_OP_REVALIDATE)))
-                nomount_hijack_dentry_ops(dir, target, false);
-        }
-        return res;
-    }
-    return ERR_PTR(-EOPNOTSUPP);
-
-do_real_lookup_blocked:
-    if (likely(nm_iop && nm_iop->orig_iop && nm_iop->orig_iop->lookup)) {
-        res = nm_iop->orig_iop->lookup(dir, dentry, flags);
-        struct dentry *target = res ? res : dentry;
-        if (unlikely(nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, hash, NULL, false))) {
-            if (!IS_ERR(target)) d_drop(target);
-        }
         if (likely(!IS_ERR(target))) {
             if (unlikely(READ_ONCE(target->d_op) != &nm_iop->fake_dops || !(READ_ONCE(target->d_flags) & DCACHE_OP_REVALIDATE)))
                 nomount_hijack_dentry_ops(dir, target, false);
