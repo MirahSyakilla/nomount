@@ -13,9 +13,15 @@ PROP_FILE="$MODDIR/module.prop"
 BASE_DESC="A metamodule that replaces OverlayFS/MagicMount with VFS path redirection."
 
 load_ko() {
-    if command -v ksud >/dev/null 2>&1 && ksud -h 2>&1 | grep -qE '(^|[[:space:]])insmod([[:space:]]|$)'; then
-        if ksud insmod "$1" >> "$LOG_FILE" && "$LOADER" version >/dev/null 2>&1; then return 0; fi
-        echo "[WARN] ksud insmod failed; falling back to lkmloader." >> "$LOG_FILE"
+    local root_cmd=""
+    if command -v ksud >/dev/null 2>&1 && ksud -h 2>&1 | grep -qE '(^|[[:space:]])insmod([[:space:]]|$)'; then root_cmd="ksud"
+    elif command -v apd >/dev/null 2>&1 && apd -h 2>&1 | grep -qE '(^|[[:space:]])insmod([[:space:]]|$)'; then root_cmd="apd"; fi
+
+    if [ -n "$root_cmd" ]; then
+        if "$root_cmd" insmod "$1" >> "$LOG_FILE" 2>&1 && "$LOADER" version >/dev/null 2>&1; then 
+            return 0
+        fi
+        echo "[WARN] $root_cmd insmod failed; falling back to lkmloader." >> "$LOG_FILE"
         rmmod nomount 2>/dev/null
     fi
 

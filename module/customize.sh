@@ -8,10 +8,10 @@ ui_print " "
 ui_print "- Device Architecture: $ARCH"
 
 # Check root implementation
-if [ "$KSU" = "true" ]; then
+if [ "$KSU" = "true" ] || command -v ksud >/dev/null 2>&1 || [ -x /data/adb/ksu/bin/ksud ];  then
   ROOT_IMP=ksu
   ui_print "- Root implementation: KernelSU"
-elif [ "$APATCH" = "true" ]; then
+elif [ "$APATCH" = "true" ] || command -v apd >/dev/null 2>&1 || [ -x /data/adb/ap/bin/apd ]; then
   ROOT_IMP=ap
   ui_print "- Root implementation: APatch"
 else
@@ -31,7 +31,7 @@ else
     ui_print "! Failed to create 'nm' symlink, skipping.."
 fi
 
-USE_KSUD=false
+USE_ROOT_INSMOD=false
 
 mv "$MODPATH/bin/lkmloader-$ARCH" "$MODPATH/lkm/lkmloader"
 set_perm "$MODPATH/lkm/lkmloader" 0 0 0755
@@ -42,13 +42,13 @@ load_ko() {
   local output
   local ret
 
-  if [ "$USE_KSUD" = true ] && [ "$MODULE_WAS_BUSY" = false ]; then
-    if ksud insmod "$ko_path" >/dev/null 2>&1 && "$MODPATH/bin/nm" version >/dev/null 2>&1; then 
+  if [ "$USE_ROOT_INSMOD" = true ] && [ "$MODULE_WAS_BUSY" = false ]; then
+    if "${ROOT_IMP}d" insmod "$ko_path" >/dev/null 2>&1 && "$MODPATH/bin/nm" version >/dev/null 2>&1; then
       return 0
     fi
-    ui_print "  [!] ksud insmod failed; falling back to lkmloader."
+    ui_print "  [!] ${ROOT_IMP}d insmod failed; falling back to lkmloader."
     rmmod nomount 2>/dev/null
-    USE_KSUD=false
+    USE_ROOT_INSMOD=false
   fi
 
   output=$("$MODPATH/lkm/lkmloader" "$ko_path" 2>&1)
@@ -115,8 +115,11 @@ else
   fi
 
   if command -v ksud >/dev/null 2>&1 && ksud -h 2>&1 | grep -qE '(^|[[:space:]])insmod([[:space:]]|$)'; then
-    USE_KSUD=true
+    USE_ROOT_INSMOD=true
     ui_print "- KernelSU ksud insmod detected; lkmloader will remain as fallback."
+  elif command -v apd >/dev/null 2>&1 && apd -h 2>&1 | grep -qE '(^|[[:space:]])insmod([[:space:]]|$)'; then
+    USE_ROOT_INSMOD=true
+    ui_print "- APatch apd insmod detected; lkmloader will remain as fallback."
   fi
 
   EXACT_MATCH="$MODPATH/lkm/nomount-${AKVER}-${KVER}.ko"
