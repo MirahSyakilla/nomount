@@ -315,9 +315,22 @@ static struct dentry *nomount_resolve_rule_dentry(struct inode *dir, struct dent
     }
 
     if (likely(prealloc_inode && ((rule_info.flags & NM_FLAG_VIRTUAL_DIR) || rule_info.r_path.dentry))) {
-        if (rule_info.this_dir && (splice_inode = cmpxchg(&rule_info.this_dir->v_inode, NULL, prealloc_inode))) {
-            if (splice_inode == (struct inode *)-1L) goto unlock_out;
-            igrab(splice_inode);
+        if (rule_info.this_dir) {
+            splice_inode = cmpxchg(&rule_info.this_dir->v_inode, NULL, (struct inode *)-2L);
+            if (splice_inode == NULL) {
+                nomount_init_prealloc_inode(prealloc_inode, prealloc_info, &rule_info);
+                smp_store_release(&rule_info.this_dir->v_inode, prealloc_inode);
+                splice_inode = prealloc_inode;
+                prealloc_inode = NULL; prealloc_info = NULL;
+                rule_info.r_path.dentry = NULL; 
+            } else {
+                while (splice_inode == (struct inode *)-2L) {
+                    cpu_relax();
+                    splice_inode = smp_load_acquire(&rule_info.this_dir->v_inode);
+                }
+                if (splice_inode == (struct inode *)-1L) goto unlock_out;
+                igrab(splice_inode);
+            }
         } else {
             nomount_init_prealloc_inode(prealloc_inode, prealloc_info, &rule_info);
             splice_inode = prealloc_inode;
