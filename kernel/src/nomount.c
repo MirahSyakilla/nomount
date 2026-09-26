@@ -1250,19 +1250,28 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
         if (i > 0) v_path[i] = '\0';
         if ((p = kern_path((parent_len == 1) ? "/" : v_path, LOOKUP_FOLLOW, &p_path)), (v_path[i] = orig_vpath), (p == 0)) {
             struct inode *v_inode = d_backing_inode(p_path.dentry);
-            struct nomount_dir_node *old_node = ({
+            struct nomount_dir_node *old_node = NULL;
+            bool is_virtual = false;
+
+            if (v_inode->i_op == &nm_dir_iops || v_inode->i_op == &nm_file_iops) {
+                struct nm_inode_info *info = v_inode->i_private;
+                old_node = info ? info->dir_node : NULL;
+                is_virtual = true;
+            } else {
                 struct nm_iop *iop = nm_get_nm_iop(smp_load_acquire(&v_inode->i_op));
                 struct nm_fop *fop = nm_get_nm_fop(smp_load_acquire(&v_inode->i_fop));
-                (iop && iop->dir_node) ? iop->dir_node : (fop ? fop->dir_node : NULL);
-            });
+                old_node = (iop && iop->dir_node) ? iop->dir_node : (fop ? fop->dir_node : NULL);
+            }
 
             if (unlikely(!(dir_node = old_node ?: __nomount_alloc_dir_node()))) {
                 err = -ENOMEM;
             } else if ((err = __nomount_inject_child_locked(dir_node, current_rule, child_name, child_len))) {
                 if (!old_node) kfree(dir_node);
             } else {
-                nomount_hijack_dir_ops(dir_node, v_inode);
-                nomount_hijack_superblock(p_path.dentry->d_sb);
+                if (!is_virtual) {
+                    nomount_hijack_dir_ops(dir_node, v_inode);
+                    nomount_hijack_superblock(p_path.dentry->d_sb);
+                }
                 shrink_dcache_parent(p_path.dentry);
                 struct dentry *dentry = nm_hash_and_lookup(p_path.dentry, &(struct qstr)QSTR_INIT(child_name, child_len));
                 if (dentry) { d_drop(dentry); dput(dentry); }
