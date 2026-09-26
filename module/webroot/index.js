@@ -481,8 +481,17 @@ async function loadModules() {
                     <div class="module-header">
                         <div class="module-info">
                             <h3>${realName || modId}</h3>
-                            <p>${translate('status_label')}: ${translate(statusKey)}</p>
-                            <p class="file-count"><span>${translate('modules_injected_files', { count: fileCount })}</span></p>
+                            <div class="module-chips">
+                                <span class="status-chip md-chip status-${statusKey.replace('status_', '')}">
+                                    ${translate(statusKey)}
+                                </span>
+                                <span class="files-chip md-chip" style="${fileCount > 0 ? '' : 'display: none;'}">
+                                    <svg viewBox="0 -960 960 960" aria-hidden="true" style="width: 1.2em; height: 1.2em; fill: currentColor;">
+                                        <path d="M160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h240l80 80h320q33 0 56.5 23.5T880-640v400q0 33-23.5 56.5T800-160H160Zm0-80h640v-400H447l-80-80H160v480Zm0 0v-480 480Z"/>
+                                    </svg>
+                                    <span class="files-count-text">${fileCount > 0 ? translate('modules_injected_files', { count: fileCount }) : ''}</span>
+                                </span>
+                            </div>
                         </div>
                         <label class="custom-switch" id="switch-${modId}">
                             <input type="checkbox" class="switch-input" aria-label="Toggle module" ${!hasDisable ? 'checked' : ''}>
@@ -1028,8 +1037,19 @@ function initDelegationAndAttach() {
         const nowLoaded = newFileCount > 0;
         const toggleChecked = card.querySelector('.switch-input').checked;
         const statusKey = nowLoaded ? (toggleChecked ? 'status_loaded' : 'status_active') : (toggleChecked ? 'status_inactive' : 'status_disabled');
-        card.querySelector('.file-count span').textContent = translate('modules_injected_files', { count: newFileCount });
-        card.querySelector('.module-info p').textContent = `${translate('status_label')}: ${translate(statusKey)}`;
+
+        const filesChip = card.querySelector('.files-chip');
+        if (newFileCount > 0) {
+            filesChip.style.display = '';
+            card.querySelector('.files-count-text').textContent = translate('modules_injected_files', { count: newFileCount });
+        } else {
+            filesChip.style.display = 'none';
+        }
+
+        const statusChip = card.querySelector('.status-chip');
+        statusChip.textContent = translate(statusKey);
+        statusChip.className = `status-chip md-chip status-${statusKey.replace('status_', '')}`;
+
         const hotBtn = card.querySelector('.btn-hot-action');
         const btnSpan = hotBtn.querySelector('span');
 

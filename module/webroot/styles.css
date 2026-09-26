@@ -118,7 +118,6 @@ body.loading { opacity: 0; visibility: hidden; }
     font-weight: 600; line-height: 20px;
     white-space: normal; overflow: visible; text-overflow: clip;
 }
-.module-card .module-info p, .module-card .file-count { font-size: 12px; line-height: 16px; }
 
 .status-label.active { color: var(--md-sys-color-on-secondary-container); }
 .status-label.inactive { color: var(--md-sys-color-error); }
@@ -441,6 +440,40 @@ md-icon svg { width: 1em; height: 1em; fill: currentColor; display: block; }
 
 .md-text-field input::placeholder { color: var(--md-sys-color-on-surface-variant); }
 .md-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+
+.module-card {
+    border-radius: 24px;
+    gap: 12px;
+}
+
+.module-chips {
+    display: flex; flex-wrap: wrap;
+    gap: 4px; margin-top: 8px;
+}
+
+.md-chip {
+    display: inline-flex; align-items: center;
+    gap: 6px; padding: 6px 9px;
+    border-radius: 8px; font-size: 12px;
+    font-weight: 600; letter-spacing: 0.1px;
+}
+
+.md-chip.status-active, .md-chip.status-loaded {
+    background-color: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+}
+
+.md-chip.status-inactive, .md-chip.status-disabled, .md-chip.status-skipped {
+    background-color: var(--md-sys-color-surface-container-highest);
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.md-chip.files-chip {
+    background-color: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+}
+.md-chip md-icon { font-size: 16px; }
+.module-divider { background-color: var(--md-sys-color-outline); opacity: 0.15; }
 
 .btn-text {
     background: transparent; border: none;
