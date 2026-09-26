@@ -34,7 +34,7 @@
   "remove_exclusion": "إزالة الاستثناء",
   "module_injected_count": "اضافه واحدة قيد الحقن",
   "modules_injected_count": "{{count}} اضافات قيد الحقن",
-  "modules_injected_files": "تم حقن {{count}} ملفًا",
+  "modules_injected_files": "{{count}} ملفًا",
   "modules_hot_load": "تحميل فوري",
   "modules_hot_unload": "إلغاء تحميل فوري",
   "unknown_value": "غير معروف",

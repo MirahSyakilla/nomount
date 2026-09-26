@@ -34,7 +34,7 @@
   "remove_exclusion": "ব্যতিক্রম থেকে সরান",
   "module_injected_count": "১টি মডিউল ইনজেক্ট হচ্ছে",
   "modules_injected_count": "{{count}}টি মডিউল ইনজেক্ট হচ্ছে",
-  "modules_injected_files": "ইনজেক্ট করা হয়েছে: {{count}}টি ফাইল",
+  "modules_injected_files": "{{count}}টি ফাইল",
   "modules_hot_load": "হট লোড",
   "modules_hot_unload": "হট আনলোড",
   "unknown_value": "অজানা",

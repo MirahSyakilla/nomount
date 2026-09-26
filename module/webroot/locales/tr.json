@@ -34,7 +34,7 @@
   "remove_exclusion": "İstisnayı kaldır",
   "module_injected_count": "1 modül enjekte ediliyor",
   "modules_injected_count": "{{count}} modül enjekte ediliyor",
-  "modules_injected_files": "Enjekte edilen: {{count}} dosya",
+  "modules_injected_files": "{{count}} dosya",
   "modules_hot_load": "Anında Yükle (Hot Load)",
   "modules_hot_unload": "Anında Kaldır (Hot Unload)",
   "unknown_value": "Bilinmiyor",

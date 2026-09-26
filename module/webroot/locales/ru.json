@@ -34,7 +34,7 @@
   "remove_exclusion": "Удалить исключение",
   "module_injected_count": "1 модуль инъецирован",
   "modules_injected_count": "{{count}} модулей инъецировано",
-  "modules_injected_files": "Инъецированo: {{count}} файлов",
+  "modules_injected_files": "{{count}} файлов",
   "modules_hot_load": "Мгновенная загрзука",
   "modules_hot_unload": "Мгновенная выгрузка",
   "unknown_value": "Неизвестно",

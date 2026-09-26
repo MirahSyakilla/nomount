@@ -486,9 +486,11 @@ async function loadModules() {
                                     ${translate(statusKey)}
                                 </span>
                                 <span class="files-chip md-chip" style="${fileCount > 0 ? '' : 'display: none;'}">
-                                    <svg viewBox="0 -960 960 960" aria-hidden="true" style="width: 1.2em; height: 1.2em; fill: currentColor;">
-                                        <path d="M160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h240l80 80h320q33 0 56.5 23.5T880-640v400q0 33-23.5 56.5T800-160H160Zm0-80h640v-400H447l-80-80H160v480Zm0 0v-480 480Z"/>
-                                    </svg>
+                                    <md-icon data-icon="syringe">
+                                        <svg viewBox="0 0 48 48" aria-hidden="true" style="width: 1.2em; height: 1.2em; fill: currentColor; transform: scaleX(-1);">
+                                            <path d="M45.4,10.3,37.7,2.6a2.1,2.1,0,0,0-2.9,0,2.1,2.1,0,0,0,0,2.8l2.5,2.5-3.4,3.4L28.5,5.8h0a2,2,0,1,0-2.8,2.9L9.9,24.4a6.3,6.3,0,0,0-1.7,5.2l1.1,6.3L4.6,40.6a1.9,1.9,0,0,0,0,2.8,1.9,1.9,0,0,0,2.8,0l4.7-4.7,6.3,1.1a6,6,0,0,0,5.2-1.7L39.4,22.3a2,2,0,1,0,2.9-2.7l-5.6-5.5,3.4-3.4,2.5,2.5a2,2,0,0,0,1.4.6A2.1,2.1,0,0,0,45.4,10.3Zm-24.6,25a2.3,2.3,0,0,1-1.8.5l-5.8-1-1-5.8a2.3,2.3,0,0,1,.5-1.8l2.6-2.5,3.2,3.2a2.1,2.1,0,0,0,2.9,0,1.9,1.9,0,0,0,0-2.8l-3.3-3.3,3.4-3.3,3.3,3.2a2,2,0,0,0,2.8-2.8l-3.3-3.3,4.2-4.1,8,8Z"/>
+                                        </svg>
+                                    </md-icon>
                                     <span class="files-count-text">${fileCount > 0 ? translate('modules_injected_files', { count: fileCount }) : ''}</span>
                                 </span>
                             </div>

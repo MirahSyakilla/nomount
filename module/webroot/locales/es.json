@@ -34,7 +34,7 @@
   "remove_exclusion": "Eliminar exclusión",
   "module_injected_count": "1 módulo inyectado",
   "modules_injected_count": "{{count}} módulos inyectados",
-  "modules_injected_files": "Inyectado: {{count}} archivos",
+  "modules_injected_files": "{{count}} archivos",
   "modules_hot_load": "Cargar",
   "modules_hot_unload": "Descargar",
   "unknown_value": "Desconocido",

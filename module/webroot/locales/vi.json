@@ -34,7 +34,7 @@
   "remove_exclusion": "Xóa",
   "module_injected_count": "Đang tiêm 1 mô-đun",
   "modules_injected_count": "Đang tiêm {{count}} mô-đun",
-  "modules_injected_files": "Đã tiêm: {{count}} tệp",
+  "modules_injected_files": "{{count}} tệp",
   "modules_hot_load": "Nạp ngay",
   "modules_hot_unload": "Gỡ ngay",
   "unknown_value": "Chưa biết",

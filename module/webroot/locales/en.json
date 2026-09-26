@@ -34,7 +34,7 @@
   "remove_exclusion": "Remove exclusion",
   "module_injected_count": "1 module injecting",
   "modules_injected_count": "{{count}} modules injecting",
-  "modules_injected_files": "Injected: {{count}} files",
+  "modules_injected_files": "{{count}} files",
   "modules_hot_load": "Hot Load",
   "modules_hot_unload": "Hot Unload",
   "unknown_value": "Unknown",

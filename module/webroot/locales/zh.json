@@ -34,7 +34,7 @@
   "remove_exclusion": "删除排除项",
   "module_injected_count": "1 个模块注入中",
   "modules_injected_count": "{{count}} 个模块注入中",
-  "modules_injected_files": "已注入: {{count}} 个文件",
+  "modules_injected_files": "{{count}} 个文件",
   "modules_hot_load": "热加载",
   "modules_hot_unload": "热卸载",
   "unknown_value": "未知",
