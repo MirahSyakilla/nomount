@@ -431,16 +431,6 @@ do_real_iterate:
     return -ENOTDIR;
 }
 
-static void nomount_hijacked_destroy_inode(struct inode *inode)
-{
-    struct nm_sop *nm_sop;
-    (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) ? nm_destroy_virtual_inode(inode) : nm_destroy_hijacked_inode(inode, false);
-
-    nm_sop = nm_get_nm_sop(smp_load_acquire(&inode->i_sb->s_op));
-    if (nm_sop && nm_sop->orig_sop && nm_sop->orig_sop->destroy_inode)
-        nm_sop->orig_sop->destroy_inode(inode);
-}
-
 static int nomount_hijacked_drop_inode(struct inode *inode)
 {
     struct nm_sop *nm_sop;
@@ -456,14 +446,14 @@ generic_fn:
 
 static void nomount_hijacked_evict_inode(struct inode *inode)
 {
-    struct nm_sop *nm_sop;
-    if (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) goto generic_fn;
+    struct nm_sop *nm_sop = nm_get_nm_sop(smp_load_acquire(&inode->i_sb->s_op));
 
-    nm_sop = nm_get_nm_sop(smp_load_acquire(&inode->i_sb->s_op));
+    (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) ? 
+        nm_destroy_virtual_inode(inode) : nm_destroy_hijacked_inode(inode, false);
+
     if (nm_sop && nm_sop->orig_sop && nm_sop->orig_sop->evict_inode) {
         nm_sop->orig_sop->evict_inode(inode);
     } else {
-generic_fn:
         truncate_inode_pages_final(&inode->i_data);
         clear_inode(inode);
     }
@@ -929,7 +919,6 @@ static inline void nomount_hijack_superblock(struct super_block *sb)
     nm_sop->orig_sop = sb->s_op;
     nm_sop->orig_xattr = nm_sop->fake_xattr = NULL;
     nm_sop->sb = sb;
-    nm_sop->fake_sop.destroy_inode = nomount_hijacked_destroy_inode;
     nm_sop->fake_sop.drop_inode = nomount_hijacked_drop_inode;
     nm_sop->fake_sop.evict_inode = nomount_hijacked_evict_inode;
 
