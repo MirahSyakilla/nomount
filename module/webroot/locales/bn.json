@@ -58,5 +58,20 @@
   "add_exclusion": "ব্যতিক্রম যোগ করুন",
   "mode_lkm": "LKM",
   "mode_builtin": "বিল্ট-ইন",
-  "module_version_label": "Module version"
+  "module_version_label": "Module version",
+  "appearance": "Appearance",
+  "theme_mode": "Theme",
+  "theme_mode_desc": "Select your preferred theme",
+  "theme_system": "System",
+  "theme_light": "Light",
+  "theme_dark": "Dark",
+  "theme_amoled": "AMOLED",
+  "material_you": "Material You",
+  "material_you_desc": "Use system wallpaper colors",
+  "custom_color": "Custom Color",
+  "custom_color_desc": "Pick your interface accent color",
+  "select_custom_color": "Select custom color",
+  "advanced": "Advanced",
+  "advanced_color": "Advanced Color",
+  "done": "Done"
 }

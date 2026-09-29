@@ -58,5 +58,20 @@
   "add_exclusion": "Agregar exclusión",
   "mode_lkm": "LKM",
   "mode_builtin": "Built-in",
-  "module_version_label": "Module version"
+  "module_version_label": "Versión del módulo",
+  "appearance": "Apariencia",
+  "theme_mode": "Tema",
+  "theme_mode_desc": "Selecciona el tema que prefieras",
+  "theme_system": "Sistema",
+  "theme_light": "Claro",
+  "theme_dark": "Oscuro",
+  "theme_amoled": "AMOLED",
+  "material_you": "Material You",
+  "material_you_desc": "Usar colores del fondo de pantalla",
+  "custom_color": "Color Personalizado",
+  "custom_color_desc": "Elige el color de acento de la interfaz",
+  "select_custom_color": "Seleccionar color",
+  "advanced": "Avanzado",
+  "advanced_color": "Color Avanzado",
+  "done": "Hecho"
 }

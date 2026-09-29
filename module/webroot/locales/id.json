@@ -58,5 +58,20 @@
   "add_exclusion": "Tambah pengecualian",
   "mode_lkm": "LKM",
   "mode_builtin": "Built-in",
-  "module_version_label": "Versi modul"
+  "module_version_label": "Versi modul",
+  "appearance": "Penampilan",
+  "theme_mode": "Tema",
+  "theme_mode_desc": "Pilih tema pilihan Anda",
+  "theme_system": "Sistem",
+  "theme_light": "Lampu",
+  "theme_dark": "Gelap",
+  "theme_amoled": "AMOLED",
+  "material_you": "Material You",
+  "material_you_desc": "Gunakan warna wallpaper sistem.",
+  "custom_color": "Warna Kustom",
+  "custom_color_desc": "Pilih warna aksen antarmuka Anda",
+  "select_custom_color": "Pilih warna khusus",
+  "advanced": "Canggih",
+  "advanced_color": "Warna Tingkat Lanjut",
+  "done": "Selesai"
 }

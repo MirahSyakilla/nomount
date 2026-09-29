@@ -58,5 +58,20 @@
   "add_exclusion": "Thêm vào danh sách đen",
   "mode_lkm": "LKM",
   "mode_builtin": "Built-in",
-  "module_version_label": "Phiên bản mô-đun"
+  "module_version_label": "Phiên bản mô-đun",
+  "appearance": "Appearance",
+  "theme_mode": "Theme",
+  "theme_mode_desc": "Select your preferred theme",
+  "theme_system": "System",
+  "theme_light": "Light",
+  "theme_dark": "Dark",
+  "theme_amoled": "AMOLED",
+  "material_you": "Material You",
+  "material_you_desc": "Use system wallpaper colors",
+  "custom_color": "Custom Color",
+  "custom_color_desc": "Pick your interface accent color",
+  "select_custom_color": "Select custom color",
+  "advanced": "Advanced",
+  "advanced_color": "Advanced Color",
+  "done": "Done"
 }

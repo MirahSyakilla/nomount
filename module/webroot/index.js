@@ -96,6 +96,7 @@ async function setAppLocale(locale, refreshView = true) {
     });
 
     renderLanguagePicker();
+    if (typeof renderThemePicker === 'function') renderThemePicker();
     const activeViewId = document.querySelector('.view-content.active')?.id;
 
     for (const id in viewLoadState) viewLoadState[id] = id === activeViewId;
@@ -125,7 +126,10 @@ function renderLanguagePicker() {
 
     if (!wrapper.dataset.listenerAttached) {
         document.getElementById('lang-select-trigger').onclick = (e) => { 
-            e.stopPropagation(); 
+            e.stopPropagation();
+            document.querySelectorAll('.custom-select-wrapper.open').forEach(w => {
+                if (w !== wrapper) w.classList.remove('open');
+            });
             wrapper.classList.toggle('open'); 
         };
         document.addEventListener('click', () => wrapper.classList.remove('open'));
@@ -137,7 +141,7 @@ function renderLanguagePicker() {
 const MOD_DIR = "/data/adb/modules";
 const NM_DATA = "/data/adb/nomount";
 const NM_BIN = "/data/adb/modules/nomount/bin/nm";
-const FILES = { disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list.json`, isolated: `${NM_DATA}/.block_isolated_uids` };
+const FILES = { disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list.json`, isolated: `${NM_DATA}/.block_isolated_uids`, theme: `${NM_DATA}/theme.json` };
 const APP_ICON_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzgwODA4MCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIvPjwvc3ZnPg==";
 const viewLoadState = { 'view-home': false, 'view-modules': false, 'view-exclusions': false, 'view-options': false };
 
@@ -207,15 +211,127 @@ function applyIcons() {
     });
 }
 
-let cachedMetaTheme = null;
-function syncSystemBarTheme() {
-    if (!cachedMetaTheme) cachedMetaTheme = document.querySelector('meta[name="theme-color"]');
-    if (!cachedMetaTheme) return;
+const THEME_NAMES = { system: 'System', light: 'Light', dark: 'Dark', amoled: 'AMOLED' };
+function renderThemePicker() {
+    const wrapper = document.getElementById('theme-select-wrapper');
+    const valueDisplay = document.getElementById('theme-select-value');
+    const menu = document.getElementById('theme-select-menu');
+    if (!wrapper || !valueDisplay || !menu) return;
 
-    const cs = getComputedStyle(document.documentElement);
-    const surfaceColor = cs.getPropertyValue('--md-sys-color-background').trim() ||
-                         cs.getPropertyValue('--md-sys-color-surface').trim();
-    if (surfaceColor) cachedMetaTheme.setAttribute('content', surfaceColor);
+    menu.replaceChildren();
+    for (const t in THEME_NAMES) {
+        const optionEl = document.createElement('div');
+        optionEl.className = `custom-select-option ${t === activeTheme ? 'selected' : ''}`;
+        const translatedName = translations[`theme_${t}`] || THEME_NAMES[t];
+        optionEl.textContent = translatedName;
+        if (t === activeTheme) valueDisplay.textContent = translatedName;
+
+        optionEl.onclick = (e) => {
+            e.stopPropagation();
+            wrapper.classList.remove('open');
+            if (t !== activeTheme) {
+                activeTheme = t;
+                localStorage.setItem('nm_theme', t);
+                applyAppearance();
+                renderThemePicker();
+                if (typeof syncThemeToDisk === 'function') syncThemeToDisk();
+            }
+        };
+        menu.appendChild(optionEl);
+    }
+
+    if (!wrapper.dataset.listenerAttached) {
+        document.getElementById('theme-select-trigger').onclick = (e) => { 
+            e.stopPropagation(); 
+            document.querySelectorAll('.custom-select-wrapper.open').forEach(w => {
+                if (w !== wrapper) w.classList.remove('open');
+            });
+            wrapper.classList.toggle('open'); 
+        };
+        document.addEventListener('click', () => wrapper.classList.remove('open'));
+        wrapper.dataset.listenerAttached = 'true';
+    }
+}
+
+let activeTheme = localStorage.getItem('nm_theme') || 'system';
+let isMaterial = localStorage.getItem('nm_material') !== 'false';
+let customColor = localStorage.getItem('nm_custom_color') || '#6750a4';
+
+function hexToHSL(hex) {
+    let r = parseInt(hex.slice(1, 3), 16) / 255;
+    let g = parseInt(hex.slice(3, 5), 16) / 255;
+    let b = parseInt(hex.slice(5, 7), 16) / 255;
+    let max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h, s, l = (max + min) / 2;
+    if (max === min) {
+        h = s = 0;
+    } else {
+        let d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        switch (max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        }
+        h /= 6;
+    }
+    return { h: Math.round(h * 360), s: Math.round(s * 100), l: Math.round(l * 100) };
+}
+
+function applyAppearance() {
+    const root = document.documentElement;
+    root.setAttribute('data-theme', activeTheme);
+    root.setAttribute('data-material', isMaterial);
+
+    if (!isMaterial) {
+        const { h, s, l } = hexToHSL(customColor);
+        root.style.setProperty('--nm-h', h);
+        root.style.setProperty('--nm-s', `${s}%`);
+        root.style.setProperty('--nm-l', `${l}%`);
+        root.style.setProperty('--nm-custom-color', customColor);
+    } else {
+        root.style.removeProperty('--nm-h');
+        root.style.removeProperty('--nm-s');
+        root.style.removeProperty('--nm-l');
+        root.style.removeProperty('--nm-custom-color');
+    }
+}
+// Apply immediately to prevent flashes
+applyAppearance();
+
+async function syncThemeToDisk() {
+    const config = { theme: activeTheme, material: isMaterial, color: customColor };
+    const jsonStr = JSON.stringify(config);
+    const b64 = btoa(unescape(encodeURIComponent(jsonStr)));
+    await exec(`mkdir -p ${NM_DATA} && echo "${b64}" | base64 -d > ${FILES.theme}.tmp && mv -f ${FILES.theme}.tmp ${FILES.theme}`);
+    localStorage.setItem('nm_theme_synced', 'true');
+}
+
+async function restoreThemeFromDisk() {
+    if (localStorage.getItem('nm_theme_synced') === 'true') return;
+
+    try {
+        const { stdout, errno } = await exec(`cat ${FILES.theme} 2>/dev/null`);
+        if (errno === 0 && stdout) {
+            const config = JSON.parse(stdout.trim());
+            let changed = false;
+            if (config.theme && config.theme !== activeTheme) { 
+                activeTheme = config.theme; localStorage.setItem('nm_theme', activeTheme); changed = true; 
+            }
+            if (config.material !== undefined && config.material !== isMaterial) { 
+                isMaterial = config.material; localStorage.setItem('nm_material', isMaterial); changed = true; 
+            }
+            if (config.color && config.color !== customColor) { 
+                customColor = config.color; localStorage.setItem('nm_custom_color', customColor); changed = true; 
+            }
+            if (changed) applyAppearance();
+        }
+
+        localStorage.setItem('nm_theme_synced', 'true');
+    } catch (e) { 
+        console.warn("No saved theme config found on disk.");
+        localStorage.setItem('nm_theme_synced', 'true');
+    }
 }
 
 const homeUI = {};
@@ -318,7 +434,7 @@ function updateTopAppBar() {
         UI.title = document.getElementById('top-app-bar-title');
     }
 
-    if (!['view-modules', 'view-exclusions'].includes(currentActiveViewId)) {
+    if (!['view-modules', 'view-exclusions', 'view-options'].includes(currentActiveViewId)) {
         if (UI.title.textContent !== '') UI.title.textContent = '';
         UI.bar.style.setProperty('--top-app-bar-opacity', '0');
         UI.bar.style.setProperty('--top-app-title-opacity', '0');
@@ -913,32 +1029,222 @@ async function addExclusion(uid, label, pkg) {
     await loadExclusions();
 }
 
-// Options
-async function loadOptions() {
-    const swSafe = document.querySelector('#setting-safemode input'),
-          swIso = document.querySelector('#setting-isolated input'),
-          swIsoCard = document.getElementById('setting-isolated-card'),
-          btnClear = document.getElementById('btn-clear-rules');
+const hslToHex = (h, s, l) => {
+    l /= 100;
+    const a = s * Math.min(l, 1 - l) / 100;
+    const f = n => {
+        const k = (n + h / 30) % 12;
+        const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+        return Math.round(255 * color).toString(16).padStart(2, '0');
+    };
+    return `#${f(0)}${f(8)}${f(4)}`;
+};
 
-    if (swSafe) {
+// Options
+let optionsInitialized = false;
+async function loadOptions() {
+    if (!optionsInitialized) initOptionsUI();
+
+    const swSafe = document.querySelector('#setting-safemode input');
+    const swIso = document.querySelector('#setting-isolated input');
+    const swIsoCard = document.getElementById('setting-isolated-card');
+
+    if (swSafe)
         swSafe.checked = (await exec(`[ -f ${FILES.disable} ] && echo yes`)).stdout.includes('yes');
-        swSafe.onchange = e => exec(e.target.checked ? `touch ${FILES.disable}` : `rm ${FILES.disable}`);
-    }
 
     if (swIso && swIsoCard) {
+        const safeModeCard = document.getElementById('setting-safemode').closest('.segment-card');
         const isoCheck = await exec(`${NM_BIN} uid block_isolated`);
         const out = isoCheck.stdout.trim();
+
         if (isoCheck.errno === 0 && (out === '1' || out === '0')) {
             swIsoCard.style.display = '';
+            if (safeModeCard) {
+                safeModeCard.style.borderStartStartRadius = '';
+                safeModeCard.style.borderStartEndRadius = '';
+            }
             swIso.checked = (out === '1');
-            swIso.onchange = async (e) => {
-                const isChecked = e.target.checked;
-                swIsoCard.dataset.busy = 'true';
-                await exec(`${NM_BIN} uid block_isolated ${isChecked ? 'on' : 'off'}`);
-                await exec(isChecked ? `touch ${FILES.isolated}` : `rm ${FILES.isolated}`);
-                delete swIsoCard.dataset.busy;
-            };
+        } else {
+            if (safeModeCard) {
+                safeModeCard.style.borderStartStartRadius = 'var(--nm-segment-outer-corner)';
+                safeModeCard.style.borderStartEndRadius = 'var(--nm-segment-outer-corner)';
+            }
         }
+    }
+}
+
+function initOptionsUI() {
+    optionsInitialized = true;
+    renderThemePicker();
+
+    const swMat = document.querySelector('#setting-material input');
+    const customColCard = document.getElementById('custom-color-card');
+    const colorIndicator = document.getElementById('custom-color-indicator');
+    const dialogPresets = document.getElementById('dialog-color-presets');
+    const dialogAdv = document.getElementById('dialog-adv-color');
+
+    if (swMat && customColCard && colorIndicator) {
+        const matCard = swMat.closest('.segment-card');
+        const updateAppearanceCards = () => {
+            customColCard.style.display = isMaterial ? 'none' : ''; 
+            if (matCard) {
+                matCard.style.borderEndStartRadius = isMaterial ? 'var(--nm-segment-outer-corner)' : '';
+                matCard.style.borderEndEndRadius = isMaterial ? 'var(--nm-segment-outer-corner)' : '';
+            }
+        };
+
+        swMat.checked = isMaterial;
+        colorIndicator.style.backgroundColor = customColor;
+        updateAppearanceCards();
+
+        swMat.onchange = (e) => {
+            isMaterial = e.target.checked;
+            localStorage.setItem('nm_material', isMaterial);
+            updateAppearanceCards();
+            applyAppearance();
+            syncThemeToDisk();
+        };
+
+        let originalColor = customColor;
+        let isAdvOpen = false;
+
+        const renderPresets = () => {
+            const grid = document.getElementById('color-presets-grid');
+            grid.replaceChildren();
+            const PALETTE = ['#ba1a1a', '#e86d28', '#d6b007', '#4c6b1f', '#006874', '#0061a4', '#3f5aa6', '#9a25ae'];
+            PALETTE.forEach(c => {
+                const btn = document.createElement('div');
+                btn.className = `preset-swatch ${c === customColor ? 'selected' : ''}`;
+                btn.style.backgroundColor = c;
+                btn.onclick = () => {
+                    customColor = c;
+                    originalColor = c;
+                    localStorage.setItem('nm_custom_color', customColor);
+                    applyAppearance();
+                    renderPresets();
+                    colorIndicator.style.backgroundColor = customColor;
+                    syncThemeToDisk();
+                };
+                grid.appendChild(btn);
+            });
+        };
+
+        const initAdvancedPicker = () => {
+            const { h, s, l } = hexToHSL(customColor);
+            const hInp = document.getElementById('adv-slider-h'),
+                  sInp = document.getElementById('adv-slider-s'),
+                  lInp = document.getElementById('adv-slider-l');
+            const preview = document.getElementById('adv-color-preview');
+            const hexInp = document.getElementById('adv-hex-input');
+
+            hInp.value = h;
+            sInp.value = s;
+            lInp.value = l;
+
+            let isTypingHex = false;
+            const updateLive = () => {
+                const hex = hslToHex(hInp.value, sInp.value, lInp.value);
+                preview.style.backgroundColor = hex;
+                customColor = hex; 
+                applyAppearance();
+                if (!isTypingHex && hexInp)
+                    hexInp.value = hex.substring(1).toUpperCase();
+            };
+
+            hInp.oninput = updateLive;
+            sInp.oninput = updateLive;
+            lInp.oninput = updateLive;
+            
+            // Hex Input Logic
+            if (hexInp) {
+                hexInp.oninput = (e) => {
+                    isTypingHex = true;
+                    let val = e.target.value.replace(/[^0-9A-Fa-f]/g, '');
+                    let parsedHex = null;
+                    if (val.length === 6)
+                        parsedHex = '#' + val;
+                    else if (val.length === 3)
+                        parsedHex = '#' + val[0] + val[0] + val[1] + val[1] + val[2] + val[2];
+
+                    if (parsedHex) {
+                        const newHsl = hexToHSL(parsedHex);
+                        hInp.value = newHsl.h;
+                        sInp.value = newHsl.s;
+                        lInp.value = newHsl.l;
+                        preview.style.backgroundColor = parsedHex;
+                        customColor = parsedHex;
+                        applyAppearance();
+                    }
+                    isTypingHex = false;
+                };
+
+                hexInp.onblur = () => {
+                    let val = hexInp.value.replace(/[^0-9A-Fa-f]/g, '');
+                    if (val.length === 3)
+                        val = val[0] + val[0] + val[1] + val[1] + val[2] + val[2];
+                    if (val.length !== 6) {
+                        val = customColor.substring(1);
+                    }
+                    hexInp.value = val.toUpperCase();
+                };
+            }
+
+            updateLive();
+        };
+        customColCard.onclick = () => {
+            originalColor = customColor;
+            history.pushState({ dialog: 'colorPresets' }, '');
+            dialogPresets.classList.add('show');
+            renderPresets();
+        };
+
+        window.addEventListener('popstate', (e) => {
+            if (isAdvOpen && (!e.state || e.state.dialog !== 'advancedColor')) {
+                dialogAdv.classList.remove('show');
+                isAdvOpen = false;
+                customColor = originalColor;
+                applyAppearance();
+                renderPresets();
+            }
+            if (!e.state || e.state.dialog !== 'colorPresets') {
+                dialogPresets.classList.remove('show');
+            }
+        });
+
+        document.getElementById('btn-color-presets-close').onclick = () => history.back();
+        document.getElementById('btn-adv-color-open').onclick = () => {
+            isAdvOpen = true;
+            history.pushState({ dialog: 'advancedColor' }, '');
+            dialogAdv.classList.add('show');
+            initAdvancedPicker();
+        };
+
+        document.getElementById('btn-adv-color-cancel').onclick = () => history.back();
+        document.getElementById('btn-adv-color-accept').onclick = () => {
+            originalColor = customColor;
+            localStorage.setItem('nm_custom_color', customColor);
+            colorIndicator.style.backgroundColor = customColor;
+            history.back();
+            syncThemeToDisk();
+        };
+    }
+
+    const swSafe = document.querySelector('#setting-safemode input');
+    const swIso = document.querySelector('#setting-isolated input');
+    const swIsoCard = document.getElementById('setting-isolated-card');
+    const btnClear = document.getElementById('btn-clear-rules');
+
+    if (swSafe)
+        swSafe.onchange = e => exec(e.target.checked ? `touch ${FILES.disable}` : `rm ${FILES.disable}`);
+
+    if (swIso && swIsoCard) {
+        swIso.onchange = async (e) => {
+            const isChecked = e.target.checked;
+            swIsoCard.dataset.busy = 'true';
+            await exec(`${NM_BIN} uid block_isolated ${isChecked ? 'on' : 'off'}`);
+            await exec(isChecked ? `touch ${FILES.isolated}` : `rm ${FILES.isolated}`);
+            delete swIsoCard.dataset.busy;
+        };
     }
 
     if (btnClear) {
@@ -1315,13 +1621,13 @@ function initScrollListener() {
 document.addEventListener('DOMContentLoaded', async () => {
     await setAppLocale((localStorage.getItem('nm_locale') || navigator.language || 'en').split('-')[0], false);
     applyIcons();
-    syncSystemBarTheme();
     initNavigation();
     initDelegationAndAttach();
     initScrollListener();
     updateTopAppBar();
     viewLoadState['view-home'] = true;
     loadHome();
+    restoreThemeFromDisk();
     document.body.classList.remove('loading');
     if ('requestIdleCallback' in window) {
         requestIdleCallback(() => ensureAppsCache(true));
