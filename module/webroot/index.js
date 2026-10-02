@@ -658,7 +658,7 @@ async function loadModule(modId) {
                     printf "/%s\\0" "$v"
                 fi
             done
-        ' _ {} + 2>/dev/null | xargs -0 -r ${NM_BIN} rule add --whiteout
+        ' _ {} + 2>/dev/null | xargs -0 -r -n 200 ${NM_BIN} rule add --whiteout
 
         find -L $valid_dirs  \\( -type f -o -type l \\) ! -name ".replace" -exec sh -c '
             mod="$1"; shift
@@ -670,7 +670,7 @@ async function loadModule(modId) {
                 ;; esac
                 printf "/%s\\0%s/%s\\0" "$v" "$mod" "$f"
             done
-        ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r ${NM_BIN} rule add
+        ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 200 ${NM_BIN} rule add
     `;
     try { await exec(script); } catch (e) { throw e; }
 }
@@ -697,7 +697,7 @@ async function unloadModule(modId) {
                     printf "/%s\\0" "$v"
                 fi
             done
-        ' _ {} + 2>/dev/null | xargs -0 -r ${NM_BIN} rule del
+        ' _ {} + 2>/dev/null | xargs -0 -r -n 200 ${NM_BIN} rule del
     `;
     try { await exec(script); } catch (e) { throw e; }
 }

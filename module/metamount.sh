@@ -93,7 +93,7 @@ for mod_path in "$MODULES_DIR"/*; do
                     elif [ "${f##*/}" = ".replace" ]; then printf "%s\0" "${v%/.replace}"
                     else printf "%s\0" "$v"; fi
                 done
-            ' _ {} + 2>/dev/null | xargs -0 -r "$LOADER" rule add --whiteout >> "$LOG_FILE" 2>&1
+            ' _ {} + 2>/dev/null | xargs -0 -r -n 200 "$LOADER" rule add --whiteout >> "$LOG_FILE" 2>&1
 
             find -L "$mod_path/$partition" \( -type f -o -type l \) ! -name ".replace" -exec sh -c '
                 for f do
@@ -106,7 +106,7 @@ for mod_path in "$MODULES_DIR"/*; do
                     ;; esac
                     printf "%s\0%s\0" "$v" "$f"
                 done
-            ' _ {} + 2>/dev/null | xargs -0 -r "$LOADER" rule add >> "$LOG_FILE" 2>&1
+            ' _ {} + 2>/dev/null | xargs -0 -r -n 200 "$LOADER" rule add >> "$LOG_FILE" 2>&1
         fi
     done
 done
