@@ -209,10 +209,24 @@ void c_main(long *sp) {
 
         case ACTION_NONE:
         default: {
-            print_literal("Usage:\n"
-                      "  nm rule {add, del, list, clear}\n"
-                      "  nm uid {add, del, list, clear, block_isolated [on|off]}\n"
-                      "  nm clear all\n");
+            print_literal(
+                "NoMount CLI (nm) - Usage Guide:\n\n"
+                "Rule Commands:\n"
+                "  nm rule add <virtual_path> <real_path>  Add a path redirection\n"
+                "  nm rule add --whiteout <virtual_path>   Hide/whiteout a path\n"
+                "  nm rule del <virtual_path>              Delete a specific rule\n"
+                "  nm rule list [--json]                   List all active rules\n"
+                "  nm rule clear                           Clear all rules\n\n"
+                "UID Commands (Exceptions):\n"
+                "  nm uid add <uid>                        Add app UID to exception list\n"
+                "  nm uid del <uid>                        Remove app UID from exceptions\n"
+                "  nm uid list                             List all UID exceptions\n"
+                "  nm uid clear                            Clear all UID exceptions\n"
+                "  nm uid block_isolated [on/1 | off/0]    Toggle isolated process blocking\n\n"
+                "General Commands:\n"
+                "  nm clear all                            Clear all rules and UIDs\n"
+                "  nm version, v, -v                       Show driver version\n"
+            );
             exit_code = 1;
             break;
         }
