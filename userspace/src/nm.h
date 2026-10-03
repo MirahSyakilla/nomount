@@ -142,11 +142,64 @@ struct nm_del_hdr {
     unsigned short v_len;
 } __attribute__((packed));
 
+struct nm_args {
+    enum nm_cli_action action;
+    int data_start_idx;
+    int is_json;
+    int is_whiteout;
+    unsigned int target_uid;
+};
+
 /* --- UTILS --- */
 #define noinline __attribute__((noinline))
 static noinline int strcmp(const char *s1, const char *s2) {
     while (*s1 && (*s1 == *s2)) { s1++; s2++; }
     return *(unsigned char *)s1 - *(unsigned char *)s2;
+}
+
+static noinline void parse_arguments(long argc, char **argv, struct nm_args *parsed_args) {
+    parsed_args->action = ACTION_NONE;
+    parsed_args->data_start_idx = 2;
+    parsed_args->is_json = 0;
+    parsed_args->is_whiteout = 0;
+    parsed_args->target_uid = 0;
+
+    if (argc < 2) return;
+
+    const char *c1 = argv[1];
+    if (strcmp(c1, "rule") == 0 && argc >= 3) {
+        const char *c2 = argv[2];
+        if (strcmp(c2, "add") == 0) parsed_args->action = ACTION_RULE_ADD;
+        else if (strcmp(c2, "del") == 0) parsed_args->action = ACTION_RULE_DEL;
+        else if (strcmp(c2, "list") == 0) parsed_args->action = ACTION_RULE_LIST;
+        else if (strcmp(c2, "clear") == 0) parsed_args->action = ACTION_RULE_CLEAR;
+        parsed_args->data_start_idx = 3;
+    } else if (strcmp(c1, "uid") == 0 && argc >= 3) {
+        const char *c2 = argv[2];
+        if (strcmp(c2, "add") == 0) parsed_args->action = ACTION_UID_ADD;
+        else if (strcmp(c2, "del") == 0) parsed_args->action = ACTION_UID_DEL;
+        else if (strcmp(c2, "list") == 0) parsed_args->action = ACTION_UID_LIST;
+        else if (strcmp(c2, "clear") == 0) parsed_args->action = ACTION_UID_CLEAR;
+        else if (strcmp(c2, "block_isolated") == 0) parsed_args->action = ACTION_BLOCK_ISOLATED_UIDS;
+        parsed_args->data_start_idx = 3;
+    } else if (strcmp(c1, "clear") == 0) {
+        if (argc >= 3 && strcmp(argv[2], "rules") == 0) parsed_args->action = ACTION_RULE_CLEAR;
+        else if (argc >= 3 && strcmp(argv[2], "uid") == 0) parsed_args->action = ACTION_UID_CLEAR;
+        else if (argc >= 3 && strcmp(argv[2], "all") == 0) parsed_args->action = ACTION_CLEAR_ALL;
+        else parsed_args->action = ACTION_CLEAR_ALL;
+        parsed_args->data_start_idx = (argc >= 3) ? 3 : 2;
+    }
+
+    /* Legacy Commands */
+    else if (strcmp(c1, "add") == 0 || strcmp(c1, "a") == 0) { parsed_args->action = ACTION_RULE_ADD; }
+    else if (strcmp(c1, "w") == 0 || strcmp(c1, "whiteout") == 0) { parsed_args->action = ACTION_RULE_ADD; parsed_args->is_whiteout = 1; }
+    else if (strcmp(c1, "del") == 0 || strcmp(c1, "d") == 0) { parsed_args->action = ACTION_RULE_DEL; }
+    else if (strcmp(c1, "block") == 0 || strcmp(c1, "b") == 0) { parsed_args->action = ACTION_UID_ADD; }
+    else if (strcmp(c1, "unblock") == 0 || strcmp(c1, "u") == 0) { parsed_args->action = ACTION_UID_DEL; }
+    else if (strcmp(c1, "list") == 0 || strcmp(c1, "l") == 0) {
+        if (argc >= 3 && strcmp(argv[2], "uid") == 0) { parsed_args->action = ACTION_UID_LIST; parsed_args->data_start_idx = 3; }
+        else { parsed_args->action = ACTION_RULE_LIST; }
+    } else if (strcmp(c1, "version") == 0 || strcmp(c1, "v") == 0 || strcmp(c1, "-v") == 0) { parsed_args->action = ACTION_VERSION; }
 }
 
 static noinline void print_strn(const char *s, unsigned long len) {
