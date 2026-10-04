@@ -1428,7 +1428,8 @@ static int __nomount_del_rule(const char *path, u16 len, unsigned int uid, struc
     if (!(leaf = nm_find_leaf(path, len)) || !(old = rcu_dereference_protected(leaf->rules, lockdep_is_held(&nomount_mutex)))) return 0;
     while (pos < old->count && old->rules[pos]->target_uid != uid) pos++;
     if (pos == old->count) return 0;
-    if ((old->rules[pos]->flags & NM_FLAG_IS_DIR) && leaf->this_dir && rcu_access_pointer(leaf->this_dir->children)) {
+    if (leaf->this_dir && rcu_access_pointer(leaf->this_dir->children) &&
+        ((old->rules[pos]->flags & NM_FLAG_IS_DIR) || !uid || old->rules[0]->target_uid)) {
         struct nomount_rule *rule;
         if (old->rules[pos]->flags & NM_FLAG_VIRTUAL_DIR) return 0;
         rule = nm_alloc_rule(NULL, 0, NM_FLAG_IS_DIR | NM_FLAG_VIRTUAL_DIR, uid);
