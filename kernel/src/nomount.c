@@ -318,7 +318,10 @@ static struct dentry *nomount_resolve_rule_dentry(struct inode *dir, struct dent
         nomount_init_prealloc_inode(prealloc_inode, prealloc_info, &rule_info);
         if (rule_info.this_dir && (splice_inode = cmpxchg(&rule_info.this_dir->v_inode, NULL, prealloc_inode))) {
             if (splice_inode == (struct inode *)-1L) goto unlock_out;
-            igrab(splice_inode);
+            if (unlikely(!igrab(splice_inode))) {
+                res = ERR_PTR(-ESTALE);
+                goto unlock_out;
+            }
             prealloc_inode->i_private = NULL; 
         } else {
             splice_inode = prealloc_inode;
