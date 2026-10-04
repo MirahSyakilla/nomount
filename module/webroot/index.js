@@ -1232,7 +1232,9 @@ function initOptionsUI() {
     const swSafe = document.querySelector('#setting-safemode input');
     const swIso = document.querySelector('#setting-isolated input');
     const swIsoCard = document.getElementById('setting-isolated-card');
-    const btnClear = document.getElementById('btn-clear-rules');
+    const btnClearRules = document.getElementById('btn-clear-rules-only');
+    const btnClearUids = document.getElementById('btn-clear-uids-only');
+    const btnClearAll = document.getElementById('btn-clear-all');
 
     if (swSafe)
         swSafe.onchange = e => exec(e.target.checked ? `touch ${FILES.disable}` : `rm ${FILES.disable}`);
@@ -1247,15 +1249,41 @@ function initOptionsUI() {
         };
     }
 
-    if (btnClear) {
-        btnClear.onclick = async () => {
+    if (btnClearRules) {
+        btnClearRules.onclick = async () => {
             showToast(translate('clear_rules_toast'));
+            try {
+                const clearResult = await exec(`${NM_BIN} rule clear`);
+                if (clearResult.errno !== 0) throw new Error(clearResult.stderr || 'Failed to clear runtime rules');
+                showToast(translate('clear_rules_done'));
+                loadModules();
+            } catch { showToast(translate('save_failed') || "Failed"); }
+        };
+    }
+
+    if (btnClearUids) {
+        btnClearUids.onclick = async () => {
+            showToast(translate('clear_uids_toast'));
+            try {
+                const persistResult = await writeExclusionsJson([]); 
+                if (persistResult.errno !== 0) throw new Error(persistResult.stderr || 'Failed to clear exclusions cache');
+                const clearResult = await exec(`${NM_BIN} uid clear`);
+                if (clearResult.errno !== 0) throw new Error(clearResult.stderr || 'Failed to clear runtime UIDs');
+                showToast(translate('clear_uids_done'));
+                loadExclusions();
+            } catch { showToast(translate('save_failed') || "Failed"); }
+        };
+    }
+
+    if (btnClearAll) {
+        btnClearAll.onclick = async () => {
+            showToast(translate('clear_all_toast'));
             try {
                 const persistResult = await writeExclusionsJson([]); 
                 if (persistResult.errno !== 0) throw new Error(persistResult.stderr || 'Failed to clear exclusions cache');
                 const clearResult = await exec(`${NM_BIN} clear all`);
                 if (clearResult.errno !== 0) throw new Error(clearResult.stderr || 'Failed to clear runtime rules');
-                showToast(translate('clear_rules_done'));
+                showToast(translate('clear_all_done'));
                 loadModules();
                 loadExclusions();
             } catch { showToast(translate('save_failed')); }
