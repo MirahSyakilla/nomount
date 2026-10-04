@@ -450,7 +450,7 @@ static void nomount_hijacked_evict_inode(struct inode *inode)
     struct nm_sop *nm_sop = nm_get_nm_sop(smp_load_acquire(&inode->i_sb->s_op));
 
     (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) ? 
-        nm_destroy_virtual_inode(inode) : nm_destroy_hijacked_inode(inode, false);
+        nm_destroy_virtual_inode(inode) : nm_destroy_hijacked_inode(inode, true);
 
     if (nm_sop && nm_sop->orig_sop && nm_sop->orig_sop->evict_inode) {
         nm_sop->orig_sop->evict_inode(inode);
@@ -1280,8 +1280,8 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
             } else if ((err = __nomount_inject_child_locked(dir_node, current_rule, child_name, child_len))) {
                 if (!old_node) kfree(dir_node);
             } else {
-                if (!is_virtual) {
-                    if (!old_node) dir_node->pinned_dentry = dget(p_path.dentry);
+                if (!old_node && !is_virtual) {
+                    dir_node->pinned_dentry = dget(p_path.dentry);
                     nomount_hijack_dir_ops(dir_node, v_inode);
                     nomount_hijack_superblock(p_path.dentry->d_sb);
                 }
