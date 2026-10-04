@@ -1387,8 +1387,11 @@ static struct nomount_rule *nm_alloc_rule(const char *v_path, const char *r_path
     }
 
     if (rule->flags & NM_FLAG_IS_DIR) {
-        rule->this_dir = kzalloc(sizeof(struct nomount_dir_node), GFP_KERNEL);
-        if (rule->this_dir) nm_dir_set_owner(rule->this_dir, rule);
+        if (unlikely(!(rule->this_dir = kzalloc(sizeof(struct nomount_dir_node), GFP_KERNEL)))) {
+            nm_free_rule(rule);
+            return ERR_PTR(-ENOMEM);
+        }
+        nm_dir_set_owner(rule->this_dir, rule);
     }
 
     return rule;
