@@ -1371,10 +1371,7 @@ static struct nomount_rule *nm_alloc_rule(const char *v_path, const char *r_path
 
     if (!is_whiteout && kern_path(nm_get_rpath(rule), LOOKUP_FOLLOW, &rule->r_path) == 0) {
         struct inode *real_inode = d_backing_inode(rule->r_path.dentry);
-        if (likely(real_inode)) {
-            real_inode->i_flags |= S_PRIVATE;
-            if (S_ISDIR(real_inode->i_mode)) rule->flags |= NM_FLAG_IS_DIR;
-        }
+        if (likely(real_inode && S_ISDIR(real_inode->i_mode))) rule->flags |= NM_FLAG_IS_DIR;
     }
 
     if (kern_path(nm_get_vpath(rule), LOOKUP_FOLLOW, &v_path_struct) == 0) {
