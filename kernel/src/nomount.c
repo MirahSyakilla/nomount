@@ -129,8 +129,11 @@ static inline void nm_destroy_virtual_inode(struct inode *inode)
 
     if (info->dir_node) {
         WRITE_ONCE(info->dir_node->v_inode, NULL);
-        if (nm_dir_tag(info->dir_node) == 1UL)
-            call_rcu(&info->dir_node->rcu, nm_dir_rcu_free);
+        smp_mb();
+        if (nm_dir_tag(info->dir_node) == 1UL) {
+            if (cmpxchg(&info->dir_node->v_inode, NULL, (struct inode *)-1L) == NULL)
+                call_rcu(&info->dir_node->rcu, nm_dir_rcu_free);
+        }
     }
 
     kfree(info);
@@ -1400,11 +1403,11 @@ static struct nomount_rule *nm_alloc_rule(const char *v_path, const char *r_path
 static void nm_free_rule(struct nomount_rule *rule)
 {
     if (rule->this_dir) {
+        nm_dir_set_owner(rule->this_dir, NULL);
+        smp_mb();
         if (cmpxchg(&rule->this_dir->v_inode, NULL, (struct inode *)-1L) == NULL) {
             nm_detach_dir_node(rule->this_dir);
             call_rcu(&rule->this_dir->rcu, nm_dir_rcu_free);
-        } else {
-            nm_dir_set_owner(rule->this_dir, NULL);
         }
     }
     if (!(rule->flags & NM_FLAG_VIRTUAL_DIR) && rule->r_path.dentry)
