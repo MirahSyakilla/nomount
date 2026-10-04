@@ -1478,7 +1478,20 @@ static void __nomount_del_rule(const char *v_path, u16 v_len, unsigned int targe
             break;
         }
     }
-    if (rule) nm_detach_rule_locked(rule, r_victims, true);
+
+    if (rule) {
+        if (rule->this_dir && rcu_access_pointer(rule->this_dir->children)) {
+            rule->flags = NM_FLAG_IS_DIR | NM_FLAG_VIRTUAL_DIR;
+            rule->r_len = 0;
+            nm_get_rpath(rule)[0] = '\0';
+            if (rule->r_path.dentry) {
+                path_put(&rule->r_path);
+                rule->r_path.dentry = NULL;
+            }
+            return;
+        }
+        nm_detach_rule_locked(rule, r_victims, true);
+    }
 }
 
 static void __nomount_clear_all(int clear_flags)
