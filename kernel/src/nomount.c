@@ -371,8 +371,6 @@ static int nomount_hijacked_iterate_dir(struct file *file, struct dir_context *c
     proxy_ctx.ctx.pos = ctx->pos;
     proxy_ctx.orig_ctx = ctx;
     proxy_ctx.dir_node = dir_node;
-    proxy_ctx.emitted = false;
-    proxy_ctx.uid_blocked = false;
 
     res = nm_call_iterate(file, &proxy_ctx.ctx, orig_fop);
     ctx->pos = proxy_ctx.ctx.pos;
@@ -775,7 +773,6 @@ static int nm_d_revalidate_common(struct inode *parent_inode, const struct qstr 
     if (owned) goto drop_it;
 
 orig_dops:
-    if (unlikely(owned)) return 1;
     if ((orig_dops = nm_get_orig_dops(iop)) && orig_dops->d_revalidate) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 14, 0)
         return orig_dops->d_revalidate(parent_inode, name, dentry, flags);
