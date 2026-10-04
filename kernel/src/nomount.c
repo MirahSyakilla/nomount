@@ -1082,13 +1082,6 @@ static void nomount_restore_superblocks(void)
 
 /*** Module Management ***/
 
-static struct nomount_dir_node *__nomount_alloc_dir_node(void)
-{
-    struct nomount_dir_node *dir_node = kzalloc(sizeof(*dir_node), GFP_KERNEL);
-    if (unlikely(!dir_node)) return NULL;
-    return dir_node;
-}
-
 static int __nomount_inject_child_locked(struct nomount_dir_node *dir_node, struct nomount_rule *rule, const char *name, size_t name_len)
 {
     struct nomount_child_array *new_arr, *old_arr;
@@ -1275,7 +1268,7 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
                 old_node = (iop && iop->dir_node) ? iop->dir_node : (fop ? fop->dir_node : NULL);
             }
 
-            if (unlikely(!(dir_node = old_node ?: __nomount_alloc_dir_node()))) {
+            if (unlikely(!(dir_node = old_node ?: kzalloc(sizeof(*dir_node), GFP_KERNEL)))) {
                 err = -ENOMEM;
             } else if ((err = __nomount_inject_child_locked(dir_node, current_rule, child_name, child_len))) {
                 if (!old_node) kfree(dir_node);
@@ -1303,7 +1296,7 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
         nm_get_vpath(irule)[parent_len] = '\0';
         nm_get_rpath(irule)[0] = '\0';
 
-        if (unlikely(!(dir_node = __nomount_alloc_dir_node()))) {
+        if (unlikely(!(dir_node = kzalloc(sizeof(*dir_node), GFP_KERNEL)))) {
             kfree(irule); err = -ENOMEM;
             break;
         }
@@ -1394,7 +1387,7 @@ static struct nomount_rule *nm_alloc_rule(const char *v_path, const char *r_path
     }
 
     if (rule->flags & NM_FLAG_IS_DIR) {
-        rule->this_dir = __nomount_alloc_dir_node();
+        rule->this_dir = kzalloc(sizeof(struct nomount_dir_node), GFP_KERNEL);
         if (rule->this_dir) nm_dir_set_owner(rule->this_dir, rule);
     }
 
