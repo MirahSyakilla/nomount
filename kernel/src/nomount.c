@@ -255,8 +255,8 @@ static void nomount_init_prealloc_inode(struct inode *inode, struct nm_inode_inf
 
 static int nm_cached_inode_test(struct inode *inode, void *data)
 {
-    return inode->i_op == &nm_dir_iops &&
-        ((struct nm_inode_info *)inode->i_private)->rule == ((struct nm_inode_info *)data)->rule;
+    struct nm_inode_info *info = READ_ONCE(inode->i_private);
+    return inode->i_op == &nm_dir_iops && info && info->rule == ((struct nm_inode_info *)data)->rule;
 }
 
 static int nm_cached_inode_set(struct inode *inode, void *data)
@@ -765,8 +765,10 @@ static int nm_d_revalidate_common(struct inode *parent_inode, const struct qstr 
 
     if (has_rule) {
         if (rule_info.flags & NM_FLAG_WHITEOUT) return !inode;
-        if (inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) &&
-                ((struct nm_inode_info *)inode->i_private)->rule == rule_info.rule) return 1;
+        if (inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops)) {
+            struct nm_inode_info *info = READ_ONCE(inode->i_private);
+            if (info && info->rule == rule_info.rule) return 1;
+        }
         goto drop_it;
     }
 
