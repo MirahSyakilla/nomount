@@ -132,6 +132,11 @@ nm uid add 10256
 * **[KernelSU](https://github.com/tiann/KernelSU)**: Root solution.
 * **All testers and contributors**: Thanks for testing this project and helping to make it stable.
 
+## License
+
+- Files under `kernel` directory are [GPL-2](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
+- All other parts except `kernel` directory are [GPL-3](https://www.gnu.org/licenses/gpl-3.0.html)
+
 ## Disclaimer
 
 **NoMount** is a kernel modification tool intended for research and development. Modifying kernel behavior carries inherent risks. The developers are not responsible for bricked devices, data loss, or thermonuclear war.
