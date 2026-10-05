@@ -747,6 +747,7 @@ static int nm_d_revalidate_common(struct inode *parent_inode, const struct qstr 
     owned = (READ_ONCE(dentry->d_op) == &nm_owned_dops) || (inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops));
     if (unlikely(nomount_is_uid_blocked(current_fsuid().val))) {
         if (owned) goto drop_it;
+        iop = nm_get_nm_iop(smp_load_acquire(&parent_inode->i_op));
         goto orig_dops;
     }
 
