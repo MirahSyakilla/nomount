@@ -138,7 +138,7 @@ static inline void nm_destroy_virtual_inode(struct inode *inode)
     kfree_rcu(info, rcu);
 }
 
-static inline void nm_destroy_hijacked_inode(struct inode *inode, bool restore)
+static inline void nm_destroy_hijacked_inode(struct inode *inode)
 {
     struct nm_dir_ops *ops = nm_get_nm_iop(smp_load_acquire(&inode->i_op));
     struct nomount_dir_node *node;
@@ -146,11 +146,8 @@ static inline void nm_destroy_hijacked_inode(struct inode *inode, bool restore)
     if (!ops && !(ops = nm_get_nm_fop(smp_load_acquire(&inode->i_fop)))) return;
     if (!(node = xchg(&ops->dir_node, NULL))) return;
 
-    if (restore) {
-        if (inode->i_op == &ops->fake_iop) smp_store_release(&inode->i_op, ops->orig_iop);
-        if (inode->i_fop == &ops->fake_fop) smp_store_release(&inode->i_fop, ops->orig_fop);
-    }
-
+    if (inode->i_op == &ops->fake_iop) smp_store_release(&inode->i_op, ops->orig_iop);
+    if (inode->i_fop == &ops->fake_fop) smp_store_release(&inode->i_fop, ops->orig_fop);
     nm_dir_put(node);
     kfree_rcu(ops, rcu);
 }
@@ -410,7 +407,7 @@ static void nomount_hijacked_evict_inode(struct inode *inode)
     struct nm_sop *nm_sop = nm_get_nm_sop(smp_load_acquire(&inode->i_sb->s_op));
 
     (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) ? 
-        nm_destroy_virtual_inode(inode) : nm_destroy_hijacked_inode(inode, true);
+        nm_destroy_virtual_inode(inode) : nm_destroy_hijacked_inode(inode);
 
     if (nm_sop && nm_sop->orig_sop && nm_sop->orig_sop->evict_inode) {
         nm_sop->orig_sop->evict_inode(inode);
@@ -1021,7 +1018,7 @@ static void nomount_restore_superblocks(void)
             spin_lock(&nm_sop->sb->s_inode_list_lock);
             list_for_each_entry(inode, &nm_sop->sb->s_inodes, i_sb_list) {
                 if (!inode->i_op && !inode->i_fop) continue;
-                nm_destroy_hijacked_inode(inode, true);
+                nm_destroy_hijacked_inode(inode);
             }
             spin_unlock(&nm_sop->sb->s_inode_list_lock);
             smp_store_release(&nm_sop->sb->s_op, nm_sop->orig_sop);
