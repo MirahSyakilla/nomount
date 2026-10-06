@@ -14,7 +14,13 @@
 #include <linux/version.h>
 #include <linux/compat.h>
 
-#define NOMOUNT_VERSION "20"
+#define NOMOUNT_BASE_VERSION "20"
+#ifdef NOMOUNT_COMMIT_COUNT
+    #define NOMOUNT_VERSION NOMOUNT_BASE_VERSION "-" NOMOUNT_COMMIT_COUNT
+#else
+    #define NOMOUNT_VERSION NOMOUNT_BASE_VERSION
+#endif
+
 #define NOMOUNT_MAGIC_SIG 0x4E4F4D4F554E54ULL /* "NOMOUNT" in hex */
 #define NM_FLAG_IS_DIR      (1 << 0)
 #define NM_FLAG_VIRTUAL_DIR (1 << 1)
