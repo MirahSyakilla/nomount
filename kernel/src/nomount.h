@@ -67,6 +67,7 @@ struct nm_sop {
 struct nm_inode_info {
     struct nomount_dir_node *dir_node;
     struct nomount_rule *rule;
+    struct rcu_head rcu;
 };
 
 struct nm_child {

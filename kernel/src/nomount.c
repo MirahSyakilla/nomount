@@ -127,26 +127,31 @@ static void nm_dir_put(struct nomount_dir_node *dir_node)
 
 static inline void nm_destroy_virtual_inode(struct inode *inode)
 {
-    struct nm_inode_info *info = inode->i_private;
+    struct nm_inode_info *info = READ_ONCE(inode->i_private);
     if (!info) return;
+
+    WRITE_ONCE(inode->i_private, NULL);
+    smp_wmb();
+
     nm_dir_put(info->dir_node);
     nm_free_rule(info->rule);
-
-    kfree(info);
-    inode->i_private = NULL;
+    kfree_rcu(info, rcu);
 }
 
 static inline void nm_destroy_hijacked_inode(struct inode *inode, bool restore)
 {
-    struct nm_dir_ops *ops = nm_get_nm_iop(inode->i_op);
-    if (!ops) ops = nm_get_nm_fop(inode->i_fop);
-    if (!ops) return;
+    struct nm_dir_ops *ops = nm_get_nm_iop(smp_load_acquire(&inode->i_op));
+    struct nomount_dir_node *node;
+
+    if (!ops && !(ops = nm_get_nm_fop(smp_load_acquire(&inode->i_fop)))) return;
+    if (!(node = xchg(&ops->dir_node, NULL))) return;
 
     if (restore) {
         if (inode->i_op == &ops->fake_iop) smp_store_release(&inode->i_op, ops->orig_iop);
         if (inode->i_fop == &ops->fake_fop) smp_store_release(&inode->i_fop, ops->orig_fop);
     }
-    nm_dir_put(ops->dir_node);
+
+    nm_dir_put(node);
     kfree_rcu(ops, rcu);
 }
 
