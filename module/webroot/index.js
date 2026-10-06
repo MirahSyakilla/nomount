@@ -2,15 +2,23 @@
 let _cbId = 0;
 function exec(cmd) {
     return new Promise((resolve) => {
-        const key = `_ksu_cb_${Date.now()}_${_cbId++}`;
+        const key = `_nm_cb_${Date.now()}_${_cbId++}`;
+        const cleanup = () => { delete window[key]; };
         window[key] = (errno, stdout, stderr) => {
-            delete window[key];
+            cleanup();
             resolve({ errno, stdout: stdout || '', stderr: stderr || '' });
         };
-        if (typeof ksu !== 'undefined' && ksu.exec) {
-            try { ksu.exec(cmd, '{}', key); } 
-            catch (e) { delete window[key]; resolve({ errno: 1, stdout: '', stderr: e?.message || 'failed' }); }
-        } else resolve({ errno: 1, stdout: '', stderr: 'ksu not defined' });
+        try {
+            if (typeof ksu !== 'undefined' && ksu.exec) {
+                ksu.exec(cmd, '{}', key);
+            } else {
+                cleanup();
+                resolve({ errno: 1, stdout: '', stderr: 'ksu not defined' });
+            }
+        } catch (e) {
+            cleanup();
+            resolve({ errno: 1, stdout: '', stderr: e?.message || 'failed' });
+        }
     });
 }
 
