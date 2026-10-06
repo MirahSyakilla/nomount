@@ -40,10 +40,17 @@ fi
 echo "=== NoMount Boot Log | Started: $(date) ===" > "$LOG_FILE"
 echo "Kernel Version: $(uname -r)" >> "$LOG_FILE"
 
+if [ -f "$NOMOUNT_DATA/disable" ]; then
+    echo "[INFO] Safe Mode active. Skipping NoMount initialization." >> "$LOG_FILE"
+    sed -i "s|^description=.*|description=[🛡️ SAFE MODE: Injection Disabled] \\\\n$BASE_DESC|" "$PROP_FILE"
+    rm -f "$BOOT_SEMAPHORE"
+    exit 0
+fi
+
 if [ -f "$BOOT_SEMAPHORE" ]; then
     echo "[FATAL] Bootloop detected! NoMount caused a crash on the last boot." >> "$LOG_FILE"
     echo "[INFO] Disabling NoMount for safety..." >> "$LOG_FILE"
-    touch "$MODDIR/disable"
+    touch "$NOMOUNT_DATA/disable"
     sed -i "s|^description=.*|description=[🚨 DISABLED: Bootloop Prevented] \\\\n$BASE_DESC|" "$PROP_FILE"
     rm -f "$BOOT_SEMAPHORE"
     exit 1

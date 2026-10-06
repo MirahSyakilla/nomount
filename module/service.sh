@@ -4,8 +4,11 @@ MODDIR=${0%/*}
 NM_BIN="$MODDIR/bin/nm"
 EXCLUSION_JSON="/data/adb/nomount/.exclusion_list.json"
 ISOLATED_FLAG="/data/adb/nomount/.block_isolated_uids"
+DISABLE_FLAG="/data/adb/nomount/disable"
 
 [ -x "$NM_BIN" ] || exit 0
+[ -f "$DISABLE_FLAG" ] && exit 0
+
 if [ -f "$EXCLUSION_JSON" ]; then
     uids=$(grep -o '"uid":"[0-9]*"' "$EXCLUSION_JSON" | cut -d'"' -f4)
     if [ -n "$uids" ]; then
