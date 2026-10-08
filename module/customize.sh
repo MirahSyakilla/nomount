@@ -35,7 +35,7 @@ USE_ROOT_INSMOD=false
 
 mv "$MODPATH/bin/lkmloader-$ARCH" "$MODPATH/lkm/lkmloader"
 set_perm "$MODPATH/lkm/lkmloader" 0 0 0755
-rm -rf "$MODPATH"/bin/nm-* "$MODPATH"/bin/ko-loader-*
+rm -rf "$MODPATH"/bin/nm-* "$MODPATH"/bin/lkmloader-*
 
 load_ko() {
   local ko_path="$1"
