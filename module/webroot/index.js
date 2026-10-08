@@ -150,6 +150,7 @@ function renderLanguagePicker() {
 const MOD_DIR = "/data/adb/modules";
 const NM_DATA = "/data/adb/nomount";
 const NM_BIN = "/data/adb/modules/nomount/bin/nm";
+const RULE_PATHS = `${MOD_DIR}/nomount/rule-paths.sh`;
 const FILES = { disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list.json`, isolated: `${NM_DATA}/.block_isolated_uids`, theme: `${NM_DATA}/theme.json` };
 const APP_ICON_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzgwODA4MCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIvPjwvc3ZnPg==";
 const viewLoadState = { 'view-home': false, 'view-modules': false, 'view-exclusions': false, 'view-options': false };
@@ -652,34 +653,9 @@ async function loadModule(modId) {
         valid_dirs=""
         for p in ${TARGET_PARTITIONS}; do [ -d "$p" ] && { [ -d "/$p" ] || [ -d "/system/$p" ]; } && valid_dirs="$valid_dirs $p"; done
         [ -z "$valid_dirs" ] && exit 0
-        find -L $valid_dirs \\( -type d -o -type c -o -name ".replace" \\) -exec sh -c '
-            for f do
-                v="$f"
-                case "$v" in system/*)
-                    p="\${v#system/}"; p="\${p%%/*}"
-                    case "$p" in vendor|system_ext|product|odm|apex|oem|optics|prism|mi_ext|my_*) v="$p\${v#system/$p}" ;; esac
-                ;; esac
-                if [ -d "$f" ]; then
-                    case "$(getfattr -n trusted.overlay.opaque "$f" 2>/dev/null)" in *"=\\"y\\""*) printf "/%s\\0" "$v";; esac
-                elif [ "\${f##*/}" = ".replace" ]; then
-                    printf "/%s\\0" "\${v%/.replace}"
-                else
-                    printf "/%s\\0" "$v"
-                fi
-            done
-        ' _ {} + 2>/dev/null | xargs -0 -r -n 200 ${NM_BIN} rule add --whiteout
+        find -L $valid_dirs \\( -type d -o -type c -o -name ".replace" \\) -exec sh "${RULE_PATHS}" path "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 200 ${NM_BIN} rule add --whiteout
 
-        find -L $valid_dirs  \\( -type f -o -type l \\) ! -name ".replace" -exec sh -c '
-            mod="$1"; shift
-            for f do
-                v="$f"
-                case "$v" in system/*)
-                    p="\${v#system/}"; p="\${p%%/*}"
-                    case "$p" in vendor|system_ext|product|odm|apex|oem|optics|prism|mi_ext|my_*) v="$p\${v#system/$p}" ;; esac
-                ;; esac
-                printf "/%s\\0%s/%s\\0" "$v" "$mod" "$f"
-            done
-        ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 200 ${NM_BIN} rule add
+        find -L $valid_dirs  \\( -type f -o -type l \\) ! -name ".replace" -exec sh "${RULE_PATHS}" pair "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 200 ${NM_BIN} rule add
     `;
     try { await exec(script); } catch (e) { throw e; }
 }
@@ -691,22 +667,7 @@ async function unloadModule(modId) {
         valid_dirs=""
         for p in ${TARGET_PARTITIONS}; do [ -d "$p" ] && { [ -d "/$p" ] || [ -d "/system/$p" ]; } && valid_dirs="$valid_dirs $p"; done
         [ -z "$valid_dirs" ] && exit 0
-        find -L $valid_dirs \\( -type f -o -type l -o -type c -o -type d \\) -exec sh -c '
-            for f do
-                v="$f"
-                case "$v" in system/*)
-                    p="\${v#system/}"; p="\${p%%/*}"
-                    case "$p" in vendor|system_ext|product|odm|apex|oem|optics|prism|mi_ext|my_*) v="$p\${v#system/$p}" ;; esac
-                ;; esac
-                if [ -d "$f" ]; then
-                    case "$(getfattr -n trusted.overlay.opaque "$f" 2>/dev/null)" in *"=\\"y\\""*) printf "/%s\\0" "$v";; esac
-                elif [ "\${f##*/}" = ".replace" ]; then
-                    printf "/%s\\0" "\${v%/.replace}"
-                else
-                    printf "/%s\\0" "$v"
-                fi
-            done
-        ' _ {} + 2>/dev/null | xargs -0 -r -n 200 ${NM_BIN} rule del
+        find -L $valid_dirs \\( -type f -o -type l -o -type c -o -type d \\) -exec sh "${RULE_PATHS}" path "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 200 ${NM_BIN} rule del
     `;
     try { await exec(script); } catch (e) { throw e; }
 }
