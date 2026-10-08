@@ -737,54 +737,49 @@ static int nm_xattr_set(const struct xattr_handler *handler, IDMAP_ARG struct de
     return proxy->orig->set(proxy->orig, IDMAP_CALL dentry, inode, name, buffer, size, flags);
 }
 
-static int nm_d_revalidate_common(struct inode *parent_inode, const struct qstr *name, struct dentry *dentry, unsigned int flags)
+static int nm_d_revalidate_common(struct inode *parent_inode, const struct qstr *name,
+                                  struct dentry *dentry, unsigned int flags)
 {
     struct nomount_dir_node *parent_dir = NULL;
-    const struct dentry_operations *orig_dops;
+    const struct dentry_operations *orig_dops = NULL;
     struct inode *inode = READ_ONCE(dentry->d_inode);
     struct nm_rule_info rule_info;
     struct nm_dir_ops *iop = NULL;
-    bool has_rule = false, owned;
+    bool owned, has_rule = false, whiteout = false, match_rule = false;
+
     if (unlikely(!parent_inode)) return 1;
+    owned = (READ_ONCE(dentry->d_op) == &nm_owned_dops) ||
+            (inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops));
 
-    owned = (READ_ONCE(dentry->d_op) == &nm_owned_dops) || (inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops));
-    if (unlikely(nomount_is_uid_blocked(current_fsuid().val))) {
-        if (owned) goto drop_it;
-        iop = nm_get_nm_iop(smp_load_acquire(&parent_inode->i_op));
-        goto orig_dops;
-    }
-
+    rcu_read_lock();
     if (parent_inode->i_op == &nm_dir_iops) {
-        parent_dir = ((struct nm_inode_info *)parent_inode->i_private)->dir_node;
-    } else if ((iop = nm_get_nm_iop(smp_load_acquire(&parent_inode->i_op)))) {
-        parent_dir = iop->dir_node;
+        struct nm_inode_info *pinfo = rcu_dereference(parent_inode->i_private);
+        parent_dir = pinfo ? pinfo->dir_node : NULL;
+    } else if ((iop = nm_get_nm_iop(rcu_dereference(parent_inode->i_op)))) {
+        parent_dir = rcu_dereference(iop->dir_node);
     }
 
-    if (parent_dir && rcu_access_pointer(parent_dir->children)) {
+    if (!nomount_is_uid_blocked(current_fsuid().val) && parent_dir && rcu_access_pointer(parent_dir->children)) {
         u32 hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name->name, name->len);
-        has_rule = nomount_get_rule_info(parent_dir, name->name, name->len, hash, &rule_info, false);
-    }
-
-    if (has_rule) {
-        if (rule_info.flags & NM_FLAG_WHITEOUT) return !inode;
-        if (inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops)) {
-            struct nm_inode_info *info = READ_ONCE(inode->i_private);
-            if (info && info->rule == rule_info.rule) return 1;
+        if ((has_rule = __nomount_get_rule_info(parent_dir, name->name, name->len, hash, &rule_info, false))) {
+            if (rule_info.flags & NM_FLAG_WHITEOUT) {
+                whiteout = true;
+            } else if (inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops)) {
+                struct nm_inode_info *info = rcu_dereference(inode->i_private);
+                if (info && info->rule == rule_info.rule)
+                    match_rule = true;
+            }
         }
-        goto drop_it;
     }
 
-    if (owned) goto drop_it;
+    orig_dops = nm_get_orig_dops(iop);
+    rcu_read_unlock();
 
-orig_dops:
-    if ((orig_dops = nm_get_orig_dops(iop)) && orig_dops->d_revalidate) {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 14, 0)
-        return orig_dops->d_revalidate(parent_inode, name, dentry, flags);
-#else
-        return orig_dops->d_revalidate(dentry, flags);
-#endif
-    }
-    return 1;
+    if (whiteout) return !inode;
+    if (match_rule) return 1;
+    if (has_rule || owned) goto drop_it;
+
+    return nm_call_orig_revalidate(orig_dops, parent_inode, name, dentry, flags);
 
 drop_it:
     if (flags & LOOKUP_RCU) return -ECHILD;

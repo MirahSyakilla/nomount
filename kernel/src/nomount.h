@@ -374,4 +374,15 @@ static inline const struct dentry_operations *nm_get_orig_dops(struct nm_dir_ops
     return (dops == NM_DOP_INITIALIZING) ? NULL : dops;
 }
 
+static inline int nm_call_orig_revalidate(const struct dentry_operations *dops, struct inode *parent_inode,
+                                          const struct qstr *name, struct dentry *dentry, unsigned int flags)
+{
+    if (!dops || !dops->d_revalidate) return 1;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 14, 0)
+    return dops->d_revalidate(parent_inode, name, dentry, flags);
+#else
+    return dops->d_revalidate(dentry, flags);
+#endif
+}
+
 #endif /* _LINUX_NOMOUNT_H */
