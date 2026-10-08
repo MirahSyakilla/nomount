@@ -1623,12 +1623,16 @@ list_done:
 
         case NM_CMD_GET_UIDS: {
             u32 *out = (u32 *)payload->buffer;
-            int count = 0, start_idx = payload->arg1;
+            u32 start_idx = payload->arg1;
             struct nm_uid_array *arr;
+            int count = 0;
+
             rcu_read_lock();
             if ((arr = rcu_dereference(nomount_uids))) {
-                while (start_idx < READ_ONCE(arr->count) && count < (sizeof(payload->buffer) / sizeof(*out)))
+                while (start_idx < READ_ONCE(arr->count) && count < (sizeof(payload->buffer) / sizeof(*out))) {
+                    if (start_idx >= (u32)READ_ONCE(arr->count)) break;
                     out[count++] = arr->uids[start_idx++];
+                }
             }
             rcu_read_unlock();            
             payload->data_size = count * sizeof(*out);
