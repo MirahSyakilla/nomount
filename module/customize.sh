@@ -87,9 +87,6 @@ ui_print "- Checking Kernel support via Internal API..."
 if "$MODPATH/bin/nm" version > /dev/null 2>&1 || "$OLD_MODPATH/bin/nm" version > /dev/null 2>&1; then
   if grep -q '^nomount ' /proc/modules; then
     ui_print "  [*] Active LKM detected during update."
-    ui_print "  [*] Clearing active rules to flush VFS references..."
-    "$MODPATH/bin/nm" clear all >/dev/null 2>&1 || "$OLD_MODPATH/bin/nm" clear all >/dev/null 2>&1
-    sleep 1
     ui_print "  [*] Attempting safe unload of the old driver..."
     rmmod_output=$(rmmod nomount 2>&1)
     if [ $? -eq 0 ]; then
