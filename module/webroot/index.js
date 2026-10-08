@@ -660,7 +660,7 @@ async function loadModule(modId) {
                     case "$p" in vendor|system_ext|product|odm|apex|oem|optics|prism|mi_ext|my_*) v="$p\${v#system/$p}" ;; esac
                 ;; esac
                 if [ -d "$f" ]; then
-                    getfattr -n trusted.overlay.opaque "$f" 2>/dev/null | grep -q "=\\"y\\"" && printf "/%s\\0" "$v"
+                    case "$(getfattr -n trusted.overlay.opaque "$f" 2>/dev/null)" in *"=\\"y\\""*) printf "/%s\\0" "$v";; esac
                 elif [ "\${f##*/}" = ".replace" ]; then
                     printf "/%s\\0" "\${v%/.replace}"
                 else
@@ -699,7 +699,7 @@ async function unloadModule(modId) {
                     case "$p" in vendor|system_ext|product|odm|apex|oem|optics|prism|mi_ext|my_*) v="$p\${v#system/$p}" ;; esac
                 ;; esac
                 if [ -d "$f" ]; then
-                    getfattr -n trusted.overlay.opaque "$f" 2>/dev/null | grep -q "=\\"y\\"" && printf "/%s\\0" "$v"
+                    case "$(getfattr -n trusted.overlay.opaque "$f" 2>/dev/null)" in *"=\\"y\\""*) printf "/%s\\0" "$v";; esac
                 elif [ "\${f##*/}" = ".replace" ]; then
                     printf "/%s\\0" "\${v%/.replace}"
                 else
