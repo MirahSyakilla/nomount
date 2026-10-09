@@ -945,6 +945,7 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
     }
     if (fop) {
         ops->fake_fop = *fop;
+        ops->fake_fop.owner = THIS_MODULE;
         if (fop->iterate_shared) ops->fake_fop.iterate_shared = nomount_hijacked_iterate_dir;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
         if (fop->iterate) ops->fake_fop.iterate = nomount_hijacked_iterate_dir;
