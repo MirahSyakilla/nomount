@@ -81,7 +81,7 @@ static bool __nomount_get_rule_info(struct nomount_dir_node *dir_node, const cha
 	uid_t fsuid = current_fsuid().val;
 
 	if (likely((children = rcu_dereference(dir_node->children)))) {
-		if (children->bloom_mask & (1ULL << (hash & 63)))
+		if (nm_bloom_test(children, hash))
 			leaf = nomount_bsearch_child(children, name, len, hash, NULL);
 	}
 
@@ -1075,11 +1075,15 @@ static int __nomount_inject_child_locked(struct nomount_dir_node *dir_node, stru
 
     if (old && nomount_bsearch_child(old, name, name_len, hash, &pos)) return -EEXIST;
     if (!(array = nm_alloc_child_array(count + 1))) return -ENOMEM;
-    array->bloom_mask = (old ? old->bloom_mask : 0) | (1ULL << (hash & 63));
+
     if (old) {
+        memcpy(array->bloom_mask, old->bloom_mask, sizeof(array->bloom_mask));
         memcpy(array->entries, old->entries, pos * sizeof(struct nm_child));
         memcpy(array->entries + pos + 1, old->entries + pos, (count - pos) * sizeof(struct nm_child));
+    } else {
+        memset(array->bloom_mask, 0, sizeof(array->bloom_mask));
     }
+    nm_bloom_set(array, hash);
     array->entries[pos] = (struct nm_child){ .hash = hash, .leaf = leaf };
     leaf->child_len = name_len;
     leaf->parent_dir = dir_node;
@@ -1103,8 +1107,9 @@ static struct nomount_dir_node *__nomount_delete_child_locked(struct nomount_lea
             if (!(array = nm_alloc_child_array(old->count - 1))) return ERR_PTR(-ENOMEM);
             memcpy(array->entries, old->entries, pos * sizeof(struct nm_child));
             memcpy(array->entries + pos, old->entries + pos + 1, (old->count - pos - 1) * sizeof(struct nm_child));
-            array->bloom_mask = 0;
-            for (int i = 0; i < array->count; i++) array->bloom_mask |= 1ULL << (array->entries[i].hash & 63);
+            memset(array->bloom_mask, 0, sizeof(array->bloom_mask));
+            for (int i = 0; i < array->count; i++)
+                nm_bloom_set(array, array->entries[i].hash);
         }
     }
     nm_publish_child_view(dir_node, array);

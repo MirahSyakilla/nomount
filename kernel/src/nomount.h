@@ -47,6 +47,9 @@ static LIST_HEAD(nomount_sb_list);
 #define nm_get_rpath(rule) ((rule)->paths)
 #define nm_get_child_name(leaf) (nm_get_vpath(leaf) + (leaf)->v_len - (leaf)->child_len)
 
+#define nm_bloom_set(arr, hash) ((arr)->bloom_mask[((hash) >> 6) & 3] |= 1ULL << ((hash) & 63))
+#define nm_bloom_test(arr, hash) (!!(arr->bloom_mask[(hash >> 6) & 3] & (1ULL << (hash & 63))))
+
 struct nm_dir_ops {
     struct inode_operations fake_iop;
     struct file_operations fake_fop;
@@ -83,7 +86,7 @@ struct nm_child {
 
 struct nomount_child_array {
     struct rcu_head rcu;
-    u64 bloom_mask;
+    u64 bloom_mask[4];
     int count;
     struct nm_child entries[];
 };
