@@ -320,8 +320,7 @@ static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *
         orig_iop = nm_iop->orig_iop;
         if (likely(!nomount_is_uid_blocked(current_fsuid().val))) {
             struct nomount_dir_node *dir_node = rcu_dereference(nm_iop->dir_node);
-            if (dir_node && rcu_access_pointer(dir_node->children))
-                found = __nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, &rule_info, true);
+            if (dir_node) found = __nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, &rule_info, true);
         }
     }
     rcu_read_unlock();
