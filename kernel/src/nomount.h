@@ -47,9 +47,6 @@ static LIST_HEAD(nomount_sb_list);
 #define nm_get_rpath(rule) ((rule)->paths)
 #define nm_get_child_name(leaf) (nm_get_vpath(leaf) + (leaf)->v_len - (leaf)->child_len)
 
-#define nm_bloom_set(arr, hash) ((arr)->bloom_mask[((hash) >> 6) & 3] |= 1ULL << ((hash) & 63))
-#define nm_bloom_test(arr, hash) (!!(arr->bloom_mask[(hash >> 6) & 3] & (1ULL << (hash & 63))))
-
 struct nm_dir_ops {
     struct inode_operations fake_iop;
     struct file_operations fake_fop;
@@ -87,9 +84,9 @@ struct nm_child {
 
 struct nomount_child_array {
     struct rcu_head rcu;
-    u64 bloom_mask[4];
     int count;
-    struct nm_child entries[];
+    u32 bloom_words;
+    u64 bloom[] __aligned(8);
 };
 
 struct nomount_dir_node {
@@ -147,6 +144,26 @@ struct nm_uid_array {
     int count;
     uid_t uids[];
 };
+
+static inline struct nm_child *nm_entries(struct nomount_child_array *arr)
+{
+    return (struct nm_child *)(arr->bloom + arr->bloom_words);
+}
+
+static inline int nm_bloom_words_for(int count)
+{
+    if (count <= 16)  return 4;
+    if (count <= 64)  return 16;
+    if (count <= 256) return 64;
+    if (count <= 1024) return 128;
+    return 256;
+}
+
+#define nm_bloom_set(arr, hash) \
+    ((arr)->bloom[((hash) >> 6) & ((arr)->bloom_words - 1)] |= 1ULL << ((hash) & 63))
+
+#define nm_bloom_test(arr, hash) \
+    (!!((arr)->bloom[((hash) >> 6) & ((arr)->bloom_words - 1)] & (1ULL << ((hash) & 63))))
 
 static __always_inline u32 nm_qhash(const char *name, size_t len)
 {
