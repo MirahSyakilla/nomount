@@ -312,35 +312,40 @@ out:
 }
 
 /*** i_op / s_op / f_op Hijacking Hooks ***/
-
 static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
 {
-    struct nm_dir_ops *nm_iop = nm_get_nm_iop(smp_load_acquire(&dir->i_op));
-    struct nomount_dir_node *dir_node = nm_iop ? READ_ONCE(nm_iop->dir_node) : NULL;
-    struct dentry *res;
+    const struct inode_operations *orig_iop = NULL;
+    struct nomount_dir_node *dir_node = NULL;
+    struct nm_dir_ops *nm_iop = NULL;
+    struct dentry *res, *target;
     u32 hash;
 
-    if (unlikely(!nm_iop || !dir_node))
-        goto do_real_lookup;
+    rcu_read_lock();
+    if ((nm_iop = nm_get_nm_iop(rcu_dereference(dir->i_op)))) {
+        orig_iop = nm_iop->orig_iop;
+        dir_node = rcu_dereference(nm_iop->dir_node);
+        if (dir_node && !atomic_inc_not_zero(&dir_node->refs))
+            dir_node = NULL;
+    }
+    rcu_read_unlock();
 
-    if (likely(!rcu_access_pointer(dir_node->children)))
-        goto do_real_lookup;
-
-    hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, dentry->d_name.name, dentry->d_name.len);
-    if (unlikely(nomount_is_uid_blocked(current_fsuid().val)))
-        goto do_real_lookup;
-
-    if ((res = nomount_resolve_rule_dentry(dir, dentry, dir_node, hash)) != ERR_PTR(-ENODATA))
-        return res;
-
-do_real_lookup:
-    if (likely(nm_iop && nm_iop->orig_iop && nm_iop->orig_iop->lookup)) {
-        res = nm_iop->orig_iop->lookup(dir, dentry, flags);
-        struct dentry *target = res ? res : dentry;
-        if (likely(!IS_ERR(target))) {
-            if (unlikely(READ_ONCE(target->d_op) != &nm_iop->fake_dops || !(READ_ONCE(target->d_flags) & DCACHE_OP_REVALIDATE)))
-                nomount_hijack_dentry_ops(dir, target, false);
+    if (dir_node) {
+        if (rcu_access_pointer(dir_node->children)) {
+            hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, dentry->d_name.name, dentry->d_name.len);
+            if (likely(!nomount_is_uid_blocked(current_fsuid().val))) {
+                if ((res = nomount_resolve_rule_dentry(dir, dentry, dir_node, hash)) != ERR_PTR(-ENODATA)) {
+                    nm_dir_put(dir_node);
+                    return res;
+                }
+            }
         }
+        nm_dir_put(dir_node);
+    }
+
+    if (likely(orig_iop && orig_iop->lookup)) {
+        target = (res = orig_iop->lookup(dir, dentry, flags)) ? res : dentry;
+        if (likely(!IS_ERR(target)))
+            nomount_hijack_dentry_ops(dir, target, false);
         return res;
     }
     return ERR_PTR(-EOPNOTSUPP);
@@ -348,45 +353,53 @@ do_real_lookup:
 
 static int nomount_hijacked_iterate_dir(struct file *file, struct dir_context *ctx)
 {
-    struct nm_dir_ops *nm_fop = nm_get_nm_fop(smp_load_acquire(&file->f_op));
-    struct nomount_dir_node *dir_node = nm_fop ? READ_ONCE(nm_fop->dir_node) : NULL;
-    const struct file_operations *orig_fop = nm_fop ? nm_fop->orig_fop : NULL;
+    const struct file_operations *orig_fop = NULL;
+    struct nomount_dir_node *dir_node = NULL;
+    struct nm_dir_ops *nm_fop = NULL;
     struct nomount_proxy_ctx proxy_ctx = { .ctx.actor = nomount_actor_proxy };
     int res = 0;
-    bool is_blocked;
+
+    rcu_read_lock();
+    if ((nm_fop = nm_get_nm_fop(rcu_dereference(file->f_op)))) {
+        orig_fop = nm_fop->orig_fop;
+        dir_node = rcu_dereference(nm_fop->dir_node);
+        if (dir_node && !atomic_inc_not_zero(&dir_node->refs))
+            dir_node = NULL;
+    }
+    rcu_read_unlock();
 
     if (unlikely(!orig_fop || !dir_node))
         goto do_real_iterate;
 
     if (unlikely(nm_is_virtual_pos(ctx->pos))) {
-        is_blocked = nomount_is_uid_blocked(current_fsuid().val);
-        if (likely(!is_blocked)) nomount_emit_virtual_children(ctx, dir_node);
+        nomount_emit_virtual_children(ctx, dir_node);
+        nm_dir_put(dir_node);
         return 0;
     }
 
-    if (likely(!rcu_access_pointer(dir_node->children)))
-        goto do_real_iterate;
-
-    is_blocked = nomount_is_uid_blocked(current_fsuid().val);
-    if (unlikely(is_blocked))
-        goto do_real_iterate;
+    if (likely(!rcu_access_pointer(dir_node->children)) ||
+        unlikely(nomount_is_uid_blocked(current_fsuid().val))) goto put_dir_node;
 
     proxy_ctx.ctx.pos = ctx->pos;
     proxy_ctx.orig_ctx = ctx;
     proxy_ctx.dir_node = dir_node;
-
     res = nm_call_iterate(file, &proxy_ctx.ctx, orig_fop);
     ctx->pos = proxy_ctx.ctx.pos;
-    
-    if (res < 0 || proxy_ctx.emitted)
+
+    if (res < 0 || proxy_ctx.emitted) {
+        nm_dir_put(dir_node);
         return res;
+    }
 
     ctx->pos = nm_pack_pos(0);
     nomount_emit_virtual_children(ctx, dir_node);
+    nm_dir_put(dir_node);
     return res;
 
+put_dir_node:
+    nm_dir_put(dir_node);
 do_real_iterate:
-    if (likely(orig_fop)) 
+    if (likely(orig_fop))
         return nm_call_iterate(file, ctx, orig_fop);
     return -ENOTDIR;
 }
