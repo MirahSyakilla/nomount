@@ -81,6 +81,7 @@ struct nm_inode_info {
 
 struct nm_child {
     u32 hash;
+    u32 bloom_hash;
     struct nomount_leaf *leaf;
 };
 
@@ -146,6 +147,17 @@ struct nm_uid_array {
     int count;
     uid_t uids[];
 };
+
+static __always_inline u32 nm_qhash(const char *name, size_t len)
+{
+    u32 h = (u32)len * 33u;
+    if (len > 0) {
+        h = (h << 5) + (u8)name[0];
+        h = (h << 5) + (u8)name[len - 1];
+        if (len > 2) h = (h << 5) + (u8)name[len >> 1];
+    }
+    return h;
+}
 
 /*** Operaction Vectors ***/
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0)
