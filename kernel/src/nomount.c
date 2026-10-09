@@ -1075,13 +1075,15 @@ static int __nomount_inject_child_locked(struct nomount_dir_node *dir_node, stru
     if (!(array = nm_alloc_child_array(count + 1, nm_bloom_words_for(count + 1)))) return -ENOMEM;
 
     if (old) {
-        memcpy(array->bloom, old->bloom, old->bloom_words * sizeof(u64));
-        if (array->bloom_words > old->bloom_words)
-            memset(array->bloom + old->bloom_words, 0, (array->bloom_words - old->bloom_words) * sizeof(u64));
         memcpy(nm_entries(array), nm_entries(old), pos * sizeof(struct nm_child));
         memcpy(nm_entries(array) + pos + 1, nm_entries(old) + pos, (count - pos) * sizeof(struct nm_child));
+    }
+    if (old && array->bloom_words == old->bloom_words) {
+        memcpy(array->bloom, old->bloom, old->bloom_words * sizeof(u64));
     } else {
         memset(array->bloom, 0, array->bloom_words * sizeof(u64));
+        for (int i = 0; i < count; i++)
+            nm_bloom_set(array, nm_entries(old)[i].bloom_hash);
     }
     nm_bloom_set(array, bloom_h);
     nm_entries(array)[pos] = (struct nm_child){ .hash = full_h, .bloom_hash = bloom_h, .leaf = leaf };
