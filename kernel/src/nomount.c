@@ -340,7 +340,7 @@ static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *
 static int nomount_hijacked_iterate_dir(struct file *file, struct dir_context *ctx)
 {
     const struct file_operations *orig_fop = NULL;
-    struct nomount_dir_node *dir_node = NULL;
+    struct nomount_dir_node *d, *dir_node = NULL;
     struct nm_dir_ops *nm_fop = NULL;
     struct nomount_proxy_ctx proxy_ctx = { .ctx.actor = nomount_actor_proxy };
     int res = 0;
@@ -348,9 +348,8 @@ static int nomount_hijacked_iterate_dir(struct file *file, struct dir_context *c
     rcu_read_lock();
     if ((nm_fop = nm_get_nm_fop(rcu_dereference(file->f_op)))) {
         orig_fop = nm_fop->orig_fop;
-        dir_node = rcu_dereference(nm_fop->dir_node);
-        if (dir_node && !atomic_inc_not_zero(&dir_node->refs))
-            dir_node = NULL;
+        if ((d = rcu_dereference(nm_fop->dir_node)) && rcu_access_pointer(d->children) && atomic_inc_not_zero(&d->refs))
+            dir_node = d;
     }
     rcu_read_unlock();
 
