@@ -7,4 +7,4 @@ ccflags-y += -DNOMOUNT_COMMIT_COUNT=\"$(NOMOUNT_COMMITS)\"
 endif
 
 obj-$(CONFIG_NOMOUNT) += nomount.o
-ccflags-y += -std=gnu11 -Wno-declaration-after-statement
+ccflags-y += -std=gnu11 -Wno-declaration-after-statement -O3
