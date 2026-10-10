@@ -73,12 +73,11 @@ static struct nomount_rule *nm_select_rule(struct nomount_leaf *leaf, unsigned i
     return fallback;
 }
 
-static bool __nomount_get_rule_info(struct nomount_dir_node *dir_node, const char *name, size_t len, struct nm_rule_info *rule_info, bool get_refs)
+static bool __nomount_get_rule_info(struct nomount_dir_node *dir_node, const char *name, size_t len, uid_t fsuid, struct nm_rule_info *rule_info, bool get_refs)
 {
     struct nomount_child_array *children;
     struct nomount_rule *rule = NULL;
     struct nomount_leaf *leaf = NULL;
-    uid_t fsuid = current_fsuid().val;
 
     if (likely((children = rcu_dereference(dir_node->children)))) {
         if (nm_bloom_test(children, nm_qhash(name, len))) {
@@ -109,7 +108,7 @@ static bool nomount_get_rule_info(struct nomount_dir_node *dir_node, const char 
     bool found;
     if (unlikely(!dir_node)) return false;
     rcu_read_lock();
-    found = __nomount_get_rule_info(dir_node, name, len, rule_info, get_refs);
+    found = __nomount_get_rule_info(dir_node, name, len, current_fsuid().val, rule_info, get_refs);
     rcu_read_unlock();
     return found;
 }
@@ -313,9 +312,10 @@ static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *
     rcu_read_lock();
     if (likely((nm_iop = nm_get_nm_iop(rcu_dereference(dir->i_op))))) {
         orig_iop = nm_iop->orig_iop;
-        if (likely(!nomount_is_uid_blocked(current_fsuid().val))) {
+        uid_t fsuid = current_fsuid().val;
+        if (likely(!nomount_is_uid_blocked(fsuid))) {
             struct nomount_dir_node *dir_node = rcu_dereference(nm_iop->dir_node);
-            if (dir_node) found = __nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, &rule_info, true);
+            if (dir_node) found = __nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, fsuid, &rule_info, true);
         }
     }
     rcu_read_unlock();
@@ -662,16 +662,17 @@ static struct dentry *nm_dir_lookup(struct inode *dir, struct dentry *dentry, un
     struct nm_inode_info *info = dir->i_private;
     struct nm_rule_info rule_info = {0};
     struct nomount_dir_node *dir_node;
+    uid_t fsuid = current_fsuid().val;
     struct dentry *res;
     bool found = false;
 
-    if (unlikely(nomount_is_uid_blocked(current_fsuid().val)))
+    if (unlikely(nomount_is_uid_blocked(fsuid)))
         goto negative_dentry;
 
     if (info->dir_node) {
         rcu_read_lock();
         if ((dir_node = rcu_dereference(info->dir_node)) && rcu_access_pointer(dir_node->children))
-            found = __nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, &rule_info, true);
+            found = __nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, fsuid, &rule_info, true);
         rcu_read_unlock();
         if (found)
             return nm_materialize_rule(dir, dentry, &rule_info);
@@ -749,6 +750,7 @@ static int nm_d_revalidate_common(struct inode *parent_inode, const struct qstr 
     struct inode *inode = READ_ONCE(dentry->d_inode);
     struct nm_rule_info rule_info;
     struct nm_dir_ops *iop = NULL;
+    uid_t fsuid = current_fsuid().val;
     bool owned, has_rule = false, whiteout = false, match_rule = false;
 
     if (unlikely(!parent_inode)) return 1;
@@ -763,8 +765,8 @@ static int nm_d_revalidate_common(struct inode *parent_inode, const struct qstr 
         parent_dir = rcu_dereference(iop->dir_node);
     }
 
-    if (!nomount_is_uid_blocked(current_fsuid().val) && parent_dir && rcu_access_pointer(parent_dir->children) && 
-              (has_rule = __nomount_get_rule_info(parent_dir, name->name, name->len, &rule_info, false))) {
+    if (!nomount_is_uid_blocked(fsuid) && parent_dir && rcu_access_pointer(parent_dir->children) && 
+          (has_rule = __nomount_get_rule_info(parent_dir, name->name, name->len, fsuid, &rule_info, false))) {
         if (rule_info.flags & NM_FLAG_WHITEOUT) {
             whiteout = true;
         } else if (inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops)) {
