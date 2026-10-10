@@ -80,7 +80,7 @@ static bool __nomount_get_rule_info(struct nomount_dir_node *dir_node, const cha
     struct nomount_leaf *leaf = NULL;
 
     if (likely((children = rcu_dereference(dir_node->children)))) {
-        if (nm_bloom_test(children, nm_qhash(name, len))) {
+        if (unlikely(nm_bloom_test(children, nm_qhash(name, len)))) {
             u32 hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name, len);
             leaf = nomount_bsearch_child(children, name, len, hash, NULL);
         }
