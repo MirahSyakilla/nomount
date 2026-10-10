@@ -22,8 +22,9 @@ static __always_inline bool nomount_is_uid_blocked(uid_t target_uid)
 
     if (likely(!rcu_access_pointer(nomount_uids)))
         return false;
+
     rcu_read_lock();
-    if ((arr = rcu_dereference(nomount_uids))) {
+    if ((arr = rcu_dereference(nomount_uids)) && nm_uid_bloom_test(arr, target_uid)) {
         for (int i = 0; i < arr->count; i++) {
             if (arr->uids[i] == target_uid) {
                 blocked = true;

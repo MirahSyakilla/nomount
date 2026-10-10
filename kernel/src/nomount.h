@@ -142,6 +142,7 @@ struct nm_rule_info {
 struct nm_uid_array {
     struct rcu_head rcu;
     int count;
+    u64 bloom_mask[4];
     uid_t uids[];
 };
 
@@ -222,18 +223,39 @@ static inline int nm_unpack_pos(loff_t pos) {
 }
 
 /* --- UIDs Array RCU Management --- */
+static __always_inline u32 nm_uid_hash(uid_t uid) { return (u32)uid * 2654435761u; }
+static __always_inline void nm_uid_bloom_set(struct nm_uid_array *arr, uid_t uid)
+{
+    u32 h = nm_uid_hash(uid);
+    arr->bloom_mask[(h >> 6) & 3] |= 1ULL << (h & 63);
+}
+static __always_inline bool nm_uid_bloom_test(struct nm_uid_array *arr, uid_t uid)
+{
+    u32 h = nm_uid_hash(uid);
+    return !!(arr->bloom_mask[(h >> 6) & 3] & (1ULL << (h & 63)));
+}
+
 static inline int nm_uid_add(uid_t target)
 {
     struct nm_uid_array *old, *new_arr;
     int count = 0;
+
     if ((old = rcu_dereference_protected(nomount_uids, lockdep_is_held(&nomount_mutex)))) {
         for (int i = 0; i < (count = old->count); i++) if (old->uids[i] == target) return -EEXIST;
     }
 
-    if (!(new_arr = kmalloc(sizeof(*new_arr) + (count + 1) * sizeof(uid_t), GFP_KERNEL))) return -ENOMEM;
+    if (!(new_arr = kmalloc(sizeof(*new_arr) + (count + 1) * sizeof(uid_t), GFP_KERNEL)))
+        return -ENOMEM;
+
     new_arr->count = count + 1;
-    if (old) memcpy(new_arr->uids, old->uids, count * sizeof(uid_t));
+    if (old) {
+        memcpy(new_arr->uids, old->uids, count * sizeof(uid_t));
+        memcpy(new_arr->bloom_mask, old->bloom_mask, sizeof(new_arr->bloom_mask));
+    } else {
+        memset(new_arr->bloom_mask, 0, sizeof(new_arr->bloom_mask));
+    }
     new_arr->uids[count] = target;
+    nm_uid_bloom_set(new_arr, target);
     rcu_assign_pointer(nomount_uids, new_arr);
     if (old) kfree_rcu(old, rcu);
     return 0;
@@ -253,7 +275,11 @@ static inline int nm_uid_del(uid_t target)
         new_arr->count = count - 1;
         if (target_idx > 0) memcpy(new_arr->uids, old->uids, target_idx * sizeof(uid_t));
         if (target_idx < count - 1) memcpy(new_arr->uids + target_idx, old->uids + target_idx + 1, (count - target_idx - 1) * sizeof(uid_t));
+        memset(new_arr->bloom_mask, 0, sizeof(new_arr->bloom_mask));
+        for (int i = 0; i < new_arr->count; i++)
+            nm_uid_bloom_set(new_arr, new_arr->uids[i]);
     }
+
     rcu_assign_pointer(nomount_uids, new_arr);
     kfree_rcu(old, rcu);
     return 0;
