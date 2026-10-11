@@ -970,9 +970,10 @@ static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry, 
     const struct dentry_operations *orig, *current_orig;
     struct nm_dir_ops *iop;
 
-    if (!dentry || !dir) return;
+    if (unlikely(!dentry || !dir)) return;
     iop = nm_get_nm_iop(smp_load_acquire(&dir->i_op));
     orig = READ_ONCE(dentry->d_op);
+    if (unlikely(!injected && !iop && orig)) return;
     if (orig == &nm_owned_dops || orig == &nm_dops || (iop && orig == &iop->fake_dops)) return;
 
     spin_lock(&dentry->d_lock);
