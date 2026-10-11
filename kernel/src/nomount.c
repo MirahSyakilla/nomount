@@ -38,16 +38,17 @@ static __always_inline bool nomount_is_uid_blocked(uid_t target_uid)
 
 static __always_inline struct nomount_leaf *nomount_bsearch_child(struct nomount_child_array *arr, const char *name, size_t len, u32 hash, int *index)
 {
+	struct nm_child *entries = nm_entries(arr);
 	int l = 0, n = arr->count;
 
 	while (n > 0) {
-		int step = n >> 1, m = l + step, less = (nm_entries(arr)[m].hash < hash), mask = -less;
+		int step = n >> 1, m = l + step, less = (entries[m].hash < hash), mask = -less;
 		l += (step + 1) & mask;
 		n = step + ((n - (step << 1) - 1) & mask);
-	}
+    }
 	if (index) *index = l;
-	while (l < arr->count && nm_entries(arr)[l].hash == hash) {
-		struct nomount_leaf *leaf = nm_entries(arr)[l].leaf;
+	while (l < arr->count && entries[l].hash == hash) {
+		struct nomount_leaf *leaf = entries[l].leaf;
 		if (likely(leaf && leaf->child_len == len)) {
 			const char *child_name = nm_get_child_name(leaf);
 			if (child_name[0] == name[0] && child_name[len - 1] == name[len - 1] &&
