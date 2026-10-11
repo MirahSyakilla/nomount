@@ -932,7 +932,7 @@ static inline void nomount_hijack_superblock(struct super_block *sb)
     nm_debug("Superblock successfully hijacked for dev: 0x%x\n", sb->s_dev);
 }
 
-static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, struct inode *inode)
+static inline bool nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, struct inode *inode)
 {
     const struct inode_operations *iop = smp_load_acquire(&inode->i_op);
     const struct file_operations *fop = smp_load_acquire(&inode->i_fop);
@@ -944,7 +944,7 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
     );
 
     if (nm_get_nm_iop(iop) || nm_get_nm_fop(fop) || (!iop && !iterate) ||
-            !(ops = kmalloc(sizeof(*ops), GFP_KERNEL))) return;
+            !(ops = kmalloc(sizeof(*ops), GFP_KERNEL))) return false;
 
     ops->orig_iop = iop;
     ops->orig_fop = fop;
@@ -967,6 +967,7 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
     if (fop) smp_store_release(&inode->i_fop, &ops->fake_fop);
 
     nm_debug("Successfully hijacked VFS ops for parent dir (ino: %lu)\n", (unsigned long)inode->i_ino);
+    return true;
 }
 
 static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry, bool injected)
@@ -1252,9 +1253,11 @@ static int nomount_generate_virtual_topology(struct nomount_leaf *target, unsign
             if ((rule && !(rule->flags & NM_FLAG_IS_DIR)) || !parent->this_dir) { err = -ENOTDIR; break; }
             err = __nomount_inject_child_locked(parent->this_dir, child, name, name_len);
             if (!err && parent->anchor.dentry) {
-                nomount_hijack_dir_ops(parent->this_dir, d_backing_inode(parent->anchor.dentry));
+                bool hijacked = nomount_hijack_dir_ops(parent->this_dir, d_backing_inode(parent->anchor.dentry));
                 nomount_hijack_superblock(parent->anchor.dentry->d_sb);
-                shrink_dcache_parent(parent->anchor.dentry);
+                if (hijacked) shrink_dcache_parent(parent->anchor.dentry);
+                struct dentry *dentry = nm_hash_and_lookup(parent->anchor.dentry, &(struct qstr)QSTR_INIT(name, name_len));
+                if (dentry) { d_drop(dentry); dput(dentry); }
             }
             break;
         }
@@ -1282,12 +1285,13 @@ static int nomount_generate_virtual_topology(struct nomount_leaf *target, unsign
                 if (!dir) err = -ENOMEM;
             }
             if (!err && !(err = __nomount_inject_child_locked(dir, child, name, name_len))) {
+                bool hijacked = false;
                 if (!virtual) {
                     if (!dir->owner && !dir->pinned_dentry) dir->pinned_dentry = dget(path.dentry);
-                    nomount_hijack_dir_ops(dir, inode);
+                    hijacked = nomount_hijack_dir_ops(dir, inode);
                     nomount_hijack_superblock(path.dentry->d_sb);
                 }
-                shrink_dcache_parent(path.dentry);
+                if (hijacked) shrink_dcache_parent(path.dentry);
                 struct dentry *child = nm_hash_and_lookup(path.dentry, &(struct qstr)QSTR_INIT(name, name_len));
                 if (child) { d_drop(child); dput(child); }
             }
