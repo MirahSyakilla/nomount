@@ -159,7 +159,8 @@ void c_main(long *sp) {
             payload->cmd = is_uids ? NM_CMD_GET_UIDS : NM_CMD_GET_LIST;
             payload->arg1 = 0;
             while (1) {
-                if (nm_send_payload(payload) < 0 || payload->data_size == 0) break;
+                exit_code = (nm_send_payload(payload) < 0);
+                if (exit_code || payload->data_size == 0) break;
 
                 char *data = payload->buffer;
                 int pos = 0;
@@ -203,7 +204,6 @@ void c_main(long *sp) {
 
             if (args.is_json) list_print_literal(&output, "\n]\n");
             list_flush(&output);
-            exit_code = 0;
             break;
         }
 
