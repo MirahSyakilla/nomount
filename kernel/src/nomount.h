@@ -168,8 +168,7 @@ static inline int nm_bloom_words_for(int count)
 
 static __always_inline u32 nm_qhash(const char *name, size_t len)
 {
-    u32 h = (u32)len * 33u;
-    h = (h << 5) + (u8)name[0];
+    u32 h = (u8)name[0] ^ (u32)len;
     h = (h << 5) + (u8)name[len - 1];
     h = (h << 5) + (u8)name[len >> 1];
     return h;

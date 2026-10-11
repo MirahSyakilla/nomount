@@ -678,7 +678,7 @@ static struct dentry *nm_dir_lookup(struct inode *dir, struct dentry *dentry, un
 
     if (info->dir_node) {
         rcu_read_lock();
-        if ((dir_node = rcu_dereference(info->dir_node)) && rcu_access_pointer(dir_node->children))
+        if ((dir_node = rcu_dereference(info->dir_node)))
             found = __nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, fsuid, &rule_info, true);
         rcu_read_unlock();
         if (found)
@@ -772,7 +772,7 @@ static int nm_d_revalidate_common(struct inode *parent_inode, const struct qstr 
         parent_dir = rcu_dereference(iop->dir_node);
     }
 
-    if (!nomount_is_uid_blocked(fsuid) && parent_dir && rcu_access_pointer(parent_dir->children) && 
+    if (!nomount_is_uid_blocked(fsuid) && parent_dir &&
           (has_rule = __nomount_get_rule_info(parent_dir, name->name, name->len, fsuid, &rule_info, false))) {
         if (rule_info.flags & NM_FLAG_WHITEOUT) {
             whiteout = true;
@@ -1656,8 +1656,7 @@ list_done:
 
             rcu_read_lock();
             if ((arr = rcu_dereference(nomount_uids))) {
-                while (start_idx < READ_ONCE(arr->count) && count < (sizeof(payload->buffer) / sizeof(*out))) {
-                    if (start_idx >= (u32)READ_ONCE(arr->count)) break;
+                while (start_idx < arr->count && count < (sizeof(payload->buffer) / sizeof(*out))) {
                     out[count++] = arr->uids[start_idx++];
                 }
             }
