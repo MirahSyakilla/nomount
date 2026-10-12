@@ -71,8 +71,8 @@ struct nm_sop {
 };
 
 struct nm_inode_info {
+    struct path r_path;
     struct nomount_dir_node *dir_node;
-    struct nomount_rule *rule;
     struct rcu_head rcu;
 };
 
@@ -99,7 +99,6 @@ struct nomount_dir_node {
 
 struct nomount_rule {
     struct path r_path;
-    atomic_t refs;
     unsigned int target_uid;
     u16 r_len;
     u16 flags;
@@ -135,7 +134,7 @@ struct nm_updates {
 struct nm_rule_info {
     u16 flags;
     unsigned long v_ino;
-    struct nomount_rule *rule;
+    struct path r_path;
     struct nomount_dir_node *this_dir;
 };
 
@@ -190,7 +189,6 @@ static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *
 static int nomount_hijacked_iterate_dir(struct file *file, struct dir_context *ctx);
 static void nomount_hijacked_evict_inode(struct inode *inode);
 static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry, bool injected);
-static void nm_free_rule(struct nomount_rule *rule);
 static void nm_dir_put(struct nomount_dir_node *dir_node);
 
 /* =====================================================================

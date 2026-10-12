@@ -94,10 +94,10 @@ static bool __nomount_get_rule_info(struct nomount_dir_node *dir_node, const cha
 	if (likely(rule_info)) {
 		rule_info->flags = rule->flags;
 		rule_info->v_ino = leaf->v_ino;
-		rule_info->rule = rule;
+		rule_info->r_path = rule->r_path;
 		rule_info->this_dir = (rule->flags & NM_FLAG_IS_DIR) ? leaf->this_dir : NULL;
 		if (get_refs) {
-			atomic_inc(&rule->refs);
+			if (rule_info->r_path.dentry) path_get(&rule_info->r_path);
 			if (rule_info->this_dir) atomic_inc(&rule_info->this_dir->refs);
 		}
 	}
@@ -138,7 +138,7 @@ static inline void nm_destroy_virtual_inode(struct inode *inode)
     smp_wmb();
 
     nm_dir_put(info->dir_node);
-    nm_free_rule(info->rule);
+    if (info->r_path.dentry) path_put(&info->r_path);
     kfree_rcu(info, rcu);
 }
 
@@ -222,14 +222,11 @@ static inline void __nomount_emit_virtual_children(struct dir_context *ctx, stru
 	}
 }
 
-static void nomount_init_prealloc_inode(struct inode *inode, struct nm_inode_info *info, struct nm_rule_info *rule_info)
+static void nomount_init_prealloc_inode(struct inode *inode, struct nm_inode_info *info, unsigned long v_ino)
 {
-    struct nomount_rule *rule = rule_info->rule;
-    struct inode *r_inode = rule->r_path.dentry ? d_backing_inode(rule->r_path.dentry) : NULL;
-    info->dir_node = rule_info->this_dir;
-    info->rule = rule;
+    struct inode *r_inode = info->r_path.dentry ? d_backing_inode(info->r_path.dentry) : NULL;
 
-    inode->i_ino = rule_info->v_ino;
+    inode->i_ino = v_ino;
     inode->i_private = info;
     inode->i_mode   = r_inode ? r_inode->i_mode    : (S_IFDIR | 0755);
     inode->i_size   = r_inode ? i_size_read(r_inode) : 4096;
@@ -252,10 +249,25 @@ static void nomount_init_prealloc_inode(struct inode *inode, struct nm_inode_inf
     if (!S_ISLNK(inode->i_mode)) inode->i_opflags |= IOP_NOFOLLOW;
 }
 
-static int nm_cached_inode_test(struct inode *inode, void *data)
+static bool nm_inode_matches_binding(struct inode *inode, const struct path *path,
+                                     struct nomount_dir_node *dir_node)
 {
     struct nm_inode_info *info = READ_ONCE(inode->i_private);
-    return inode->i_op == &nm_dir_iops && info && info->rule == ((struct nm_inode_info *)data)->rule;
+    struct inode *r_inode;
+
+    if (!info || info->dir_node != dir_node || !path_equal(&info->r_path, path))
+        return false;
+    r_inode = path->dentry ? d_backing_inode(path->dentry) : NULL;
+    return !r_inode || (inode->i_state & I_NEW) ||
+           (inode->i_mode == r_inode->i_mode && uid_eq(inode->i_uid, r_inode->i_uid) &&
+            gid_eq(inode->i_gid, r_inode->i_gid));
+}
+
+static int nm_cached_inode_test(struct inode *inode, void *data)
+{
+    struct nm_inode_info *info = data;
+    return inode->i_op == &nm_dir_iops &&
+           nm_inode_matches_binding(inode, &info->r_path, info->dir_node);
 }
 
 static int nm_cached_inode_set(struct inode *inode, void *data)
@@ -279,25 +291,26 @@ static struct dentry *nm_materialize_rule(struct inode *dir, struct dentry *dent
     }
 
     if (!(info = kmalloc(sizeof(*info), GFP_KERNEL))) goto out;
-    info->rule = rule_info->rule;
+    info->r_path = rule_info->r_path;
+    info->dir_node = rule_info->this_dir;
     if (rule_info->this_dir)
-        inode = iget5_locked(dir->i_sb, (unsigned long)rule_info->rule, nm_cached_inode_test, nm_cached_inode_set, info);
+        inode = iget5_locked(dir->i_sb, (unsigned long)rule_info->this_dir, nm_cached_inode_test, nm_cached_inode_set, info);
     else
         inode = new_inode(dir->i_sb);
 
     if (!inode) goto out;
     if (!rule_info->this_dir || (inode->i_state & I_NEW)) {
-        nomount_init_prealloc_inode(inode, info, rule_info);
-        info = NULL; rule_info->rule = NULL;
+        nomount_init_prealloc_inode(inode, info, rule_info->v_ino);
+        info = NULL;
         if (rule_info->this_dir) unlock_new_inode(inode);
-        rule_info->this_dir = NULL;
     }
     if (!IS_ERR((res = d_splice_alias(inode, dentry))))
         nomount_hijack_dentry_ops(dir, res ? res : dentry, true);
+    if (!info) return res;
 out:
     kfree(info);
     nm_dir_put(rule_info->this_dir);
-    if (rule_info->rule) nm_free_rule(rule_info->rule);
+    if (rule_info->r_path.dentry) path_put(&rule_info->r_path);
     return res;
 }
 
@@ -423,13 +436,12 @@ static int nm_open(struct inode *inode, struct file *file)
     struct file *real_file;
 
     if (unlikely(!info)) return -ENODEV;
-    if (unlikely(info->rule->flags & NM_FLAG_VIRTUAL_DIR)) {
+    if (unlikely(!info->r_path.dentry)) {
         file->private_data = NULL;
         return 0;
     }
-    if (unlikely(!info->rule->r_path.dentry)) return -ENODEV;
 
-    real_file = dentry_open(&info->rule->r_path, (file->f_flags & ~(O_CREAT | O_EXCL | O_NOCTTY)), file->f_cred);
+    real_file = dentry_open(&info->r_path, (file->f_flags & ~(O_CREAT | O_EXCL | O_NOCTTY)), file->f_cred);
     if (IS_ERR(real_file)) return PTR_ERR(real_file);
 
     file->private_data = real_file;
@@ -543,12 +555,11 @@ static ssize_t nm_listxattr(struct dentry *dentry, char *buffer, size_t size)
     struct inode *r_inode;
 
     if (unlikely(!info)) return -EIO;
-    if (info->rule->flags & NM_FLAG_VIRTUAL_DIR) return 0;
-    if (!info->rule->r_path.dentry) return -EOPNOTSUPP;
+    if (!info->r_path.dentry) return 0;
 
-    r_inode = d_backing_inode(info->rule->r_path.dentry);
+    r_inode = d_backing_inode(info->r_path.dentry);
     if (!r_inode || !r_inode->i_op || !r_inode->i_op->listxattr) return 0;
-    return r_inode->i_op->listxattr(info->rule->r_path.dentry, buffer, size);
+    return r_inode->i_op->listxattr(info->r_path.dentry, buffer, size);
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
@@ -565,7 +576,7 @@ static int nm_getattr(IDMAP_ARG const struct path *path, struct kstat *stat, u32
     int res = 0;
 
     if (unlikely(!info)) return -EIO;
-    if (unlikely(info->rule->flags & NM_FLAG_VIRTUAL_DIR))
+    if (unlikely(!info->r_path.dentry))
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
         generic_fillattr(IDMAP_CALL request_mask, v_inode, stat);
 #else
@@ -573,9 +584,9 @@ static int nm_getattr(IDMAP_ARG const struct path *path, struct kstat *stat, u32
 #endif
     else
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
-        res = vfs_getattr_nosec(&info->rule->r_path, stat);
+        res = vfs_getattr_nosec(&info->r_path, stat);
 #else
-        res = vfs_getattr_nosec(&info->rule->r_path, stat, request_mask, query_flags);
+        res = vfs_getattr_nosec(&info->r_path, stat, request_mask, query_flags);
 #endif
 
     if (likely(res == 0)) {
@@ -594,11 +605,11 @@ static int nm_setattr(IDMAP_ARG struct dentry *dentry, struct iattr *attr)
     int err;
 
     if (unlikely(!info)) return -EIO;
-    if (info->rule->flags & NM_FLAG_VIRTUAL_DIR) return 0;
+    if (!info->r_path.dentry) return 0;
 
-    r_inode = d_backing_inode(info->rule->r_path.dentry);
+    r_inode = d_backing_inode(info->r_path.dentry);
     inode_lock(r_inode);
-    err = notify_change(IDMAP_CALL info->rule->r_path.dentry, attr, NULL);
+    err = notify_change(IDMAP_CALL info->r_path.dentry, attr, NULL);
     inode_unlock(r_inode);
 
     if (likely(!err)) {
@@ -616,10 +627,10 @@ static const char *nm_get_link(struct dentry *dentry, struct inode *inode, struc
     struct nm_inode_info *info = inode->i_private;
     struct inode *real_inode;
     struct dentry *target_dentry;
-    if (unlikely(!info || !info->rule->r_path.dentry)) return ERR_PTR(-ECHILD);
+    if (unlikely(!info || !info->r_path.dentry)) return ERR_PTR(-ECHILD);
 
-    real_inode = d_backing_inode(info->rule->r_path.dentry);
-    target_dentry = dentry ? info->rule->r_path.dentry : NULL;
+    real_inode = d_backing_inode(info->r_path.dentry);
+    target_dentry = dentry ? info->r_path.dentry : NULL;
     if (real_inode && real_inode->i_op && real_inode->i_op->get_link) {
         return real_inode->i_op->get_link(target_dentry, real_inode, done);
     }
@@ -651,7 +662,7 @@ static int nm_dir_iterate_dir(struct file *file, struct dir_context *ctx)
         ctx->pos = proxy_ctx.ctx.pos;
         if (res < 0 || proxy_ctx.emitted) return res;
         ctx->pos = nm_pack_pos(0);
-    } else if (info && (info->rule->flags & NM_FLAG_VIRTUAL_DIR)) {
+    } else if (info && !info->r_path.dentry) {
         if (ctx->pos < 2 && !dir_emit_dots(file, ctx)) return 0;
         ctx->pos = nm_pack_pos(0);
     } else {
@@ -685,16 +696,14 @@ static struct dentry *nm_dir_lookup(struct inode *dir, struct dentry *dentry, un
             return nm_materialize_rule(dir, dentry, &rule_info);
     }
 
-    if (info->rule->flags & NM_FLAG_VIRTUAL_DIR)
+    if (!info->r_path.dentry)
         goto negative_dentry;
 
-    if (info->rule->r_path.dentry) {
-        struct inode *r_dir = d_backing_inode(info->rule->r_path.dentry);
-        if (r_dir->i_op->lookup) {
-            res = r_dir->i_op->lookup(r_dir, dentry, flags);
-            if (!IS_ERR(res ? res : dentry)) nomount_hijack_dentry_ops(dir, res ? res : dentry, false);
-            return res;
-        }
+    struct inode *r_dir = d_backing_inode(info->r_path.dentry);
+    if (r_dir->i_op->lookup) {
+        res = r_dir->i_op->lookup(r_dir, dentry, flags);
+        if (!IS_ERR(res ? res : dentry)) nomount_hijack_dentry_ops(dir, res ? res : dentry, false);
+        return res;
     }
     return ERR_PTR(-EOPNOTSUPP);
 
@@ -714,8 +723,8 @@ static int nm_xattr_get(const struct xattr_handler *handler, struct dentry *dent
     struct nm_xattr_proxy *proxy = container_of(handler, struct nm_xattr_proxy, fake);
     if (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) {
         struct nm_inode_info *info = inode->i_private;
-        if (unlikely(!info || !info->rule->r_path.dentry)) return -ENODATA;
-        return __vfs_getxattr(info->rule->r_path.dentry, d_inode(info->rule->r_path.dentry), xattr_full_name(handler, name), buffer, size FLAGS_VAL);
+        if (unlikely(!info || !info->r_path.dentry)) return -ENODATA;
+        return __vfs_getxattr(info->r_path.dentry, d_inode(info->r_path.dentry), xattr_full_name(handler, name), buffer, size FLAGS_VAL);
     }
 
     return proxy->orig->get(proxy->orig, dentry, inode, name, buffer, size FLAGS_VAL);
@@ -728,8 +737,8 @@ static int nm_xattr__get(const struct xattr_handler *handler, struct dentry *den
     struct nm_xattr_proxy *proxy = container_of(handler, struct nm_xattr_proxy, fake);
     if (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) {
         struct nm_inode_info *info = inode->i_private;
-        if (unlikely(!info || !info->rule->r_path.dentry)) return -ENODATA;
-        return __vfs_getxattr(info->rule->r_path.dentry, d_inode(info->rule->r_path.dentry), xattr_full_name(handler, name), buffer, size);
+        if (unlikely(!info || !info->r_path.dentry)) return -ENODATA;
+        return __vfs_getxattr(info->r_path.dentry, d_inode(info->r_path.dentry), xattr_full_name(handler, name), buffer, size);
     }
 
     if (proxy->orig->__get)
@@ -743,8 +752,8 @@ static int nm_xattr_set(const struct xattr_handler *handler, IDMAP_ARG struct de
     struct nm_xattr_proxy *proxy = container_of(handler, struct nm_xattr_proxy, fake);
     if (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) {
         struct nm_inode_info *info = inode->i_private;
-        if (unlikely(!info || !info->rule->r_path.dentry)) return -ENODATA;
-        return __vfs_setxattr(IDMAP_PATH(info->rule->r_path) info->rule->r_path.dentry, d_inode(info->rule->r_path.dentry), xattr_full_name(handler, name), buffer, size, flags);
+        if (unlikely(!info || !info->r_path.dentry)) return -ENODATA;
+        return __vfs_setxattr(IDMAP_PATH(info->r_path) info->r_path.dentry, d_inode(info->r_path.dentry), xattr_full_name(handler, name), buffer, size, flags);
     }
     return proxy->orig->set(proxy->orig, IDMAP_CALL dentry, inode, name, buffer, size, flags);
 }
@@ -777,9 +786,7 @@ static int nm_d_revalidate_common(struct inode *parent_inode, const struct qstr 
         if (rule_info.flags & NM_FLAG_WHITEOUT) {
             whiteout = true;
         } else if (inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops)) {
-            struct nm_inode_info *info = rcu_dereference(inode->i_private);
-            if (info && info->rule == rule_info.rule)
-                match_rule = true;
+            match_rule = nm_inode_matches_binding(inode, &rule_info.r_path, rule_info.this_dir);
         }
     }
 
@@ -1149,10 +1156,8 @@ static struct nm_rule_array *nm_alloc_rule_array(int count)
 
 static void nm_free_rule(struct nomount_rule *rule)
 {
-    if (atomic_dec_and_test(&rule->refs)) {
-        if (rule->r_path.dentry) path_put(&rule->r_path);
-        kfree(rule);
-    }
+    if (rule->r_path.dentry) path_put(&rule->r_path);
+    kfree(rule);
 }
 
 static struct nomount_rule *nm_alloc_rule(const char *r_path, u16 r_len, u32 flags, unsigned int uid)
@@ -1164,7 +1169,6 @@ static struct nomount_rule *nm_alloc_rule(const char *r_path, u16 r_len, u32 fla
     if (backed) while (r_len > 1 && r_path[r_len - 1] == '/') r_len--;
     else r_len = 0;
     if (!(rule = kzalloc(sizeof(*rule) + r_len + 1, GFP_KERNEL))) return ERR_PTR(-ENOMEM);
-    atomic_set(&rule->refs, 1);
     rule->r_len = r_len;
     rule->flags = flags;
     rule->target_uid = uid;
