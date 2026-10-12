@@ -1528,7 +1528,7 @@ static int __nomount_del_rule(const char *path, u16 len, unsigned int uid, struc
     for (int i = 0, j = 0; i < old->count; i++) {
         if (!stub_virtual && i == pos) { old_h += old->rules[i].r_len + 1; continue; }
         if (stub_virtual && i == pos) {
-            array->rules[j].r_path = (struct path){0};
+            array->rules[j].r_path = (struct path){ .mnt = NULL, .dentry = NULL };
             array->rules[j].target_uid = uid;
             array->rules[j].r_len = 0;
             array->rules[j].flags = NM_FLAG_IS_DIR | NM_FLAG_VIRTUAL_DIR;
