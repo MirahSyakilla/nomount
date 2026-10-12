@@ -1306,9 +1306,9 @@ static int nomount_generate_virtual_topology(struct nomount_leaf *target, unsign
         nm_rule_heap(rules)[0] = '\0';
         RCU_INIT_POINTER(parent->rules, rules);
 
-        err = __nomount_inject_child_locked(parent->this_dir, child, name, name_len);
-        if (err) { nm_free_leaf(parent); break; }
         hlist_add_head(&parent->ht_node, &pending);
+        err = __nomount_inject_child_locked(parent->this_dir, child, name, name_len);
+        if (err) break;
         child = parent;
         len = parent_len;
     }
@@ -1316,7 +1316,10 @@ static int nomount_generate_virtual_topology(struct nomount_leaf *target, unsign
     hlist_for_each_entry_safe(parent, h_tmp, &pending, ht_node) {
         hlist_del(&parent->ht_node);
         if (!err) hash_add_rcu(nomount_leaves_ht, &parent->ht_node, parent->v_hash);
-        else nm_free_leaf(parent);
+        else {
+            kfree(rcu_access_pointer(parent->rules));
+            nm_free_leaf(parent);
+        }
     }
     return err;
 }
