@@ -43,9 +43,8 @@ static DEFINE_MUTEX(nomount_mutex);
 static LIST_HEAD(nomount_sb_list);
 
 /* * Helpers to dynamically calculate the memory address of the strings / structs */
-#define nm_get_vpath(leaf) ((leaf)->paths)
-#define nm_get_rpath(rule) ((rule)->paths)
-#define nm_get_child_name(leaf) (nm_get_vpath(leaf) + (leaf)->v_len - (leaf)->child_len)
+#define nm_get_child_name(leaf) ((leaf)->paths + (leaf)->v_len - (leaf)->child_len)
+#define nm_rule_heap(arr) ((char *)(arr)->rules + (arr)->count * sizeof(struct nm_rule))
 
 struct nm_dir_ops {
     struct inode_operations fake_iop;
@@ -97,19 +96,17 @@ struct nomount_dir_node {
     struct nomount_leaf *owner;
 };
 
-struct nomount_rule {
+struct nm_rule {
     struct path r_path;
     unsigned int target_uid;
     u16 r_len;
     u16 flags;
-    struct nomount_rule *next;
-    char paths[];
 };
 
 struct nm_rule_array {
-    struct rcu_head rcu;
+    struct nm_rule_array *next;
     int count;
-    struct nomount_rule *rules[];
+    struct nm_rule rules[];
 };
 
 struct nomount_leaf {
@@ -127,7 +124,7 @@ struct nomount_leaf {
 };
 
 struct nm_updates {
-    struct nomount_rule *rules;
+    struct nm_rule_array *arrays;
     struct nomount_leaf *leaves;
 };
 
