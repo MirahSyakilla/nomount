@@ -893,13 +893,13 @@ static const struct inode_operations nm_dir_iops = {
 
 /* --- Hijacking Management --- */
 
-static inline void nomount_hijack_superblock(struct super_block *sb)
+static inline int nomount_hijack_superblock(struct super_block *sb)
 {
     struct nm_sop *nm_sop;
     int count = 0;
 
-    if (unlikely(!sb || !sb->s_op || nm_get_nm_sop(smp_load_acquire(&sb->s_op)) ||
-                 !(nm_sop = kmalloc(sizeof(*nm_sop), GFP_KERNEL)))) return;
+    if (nm_get_nm_sop(smp_load_acquire(&sb->s_op))) return 0;
+    if (!(nm_sop = kmalloc(sizeof(*nm_sop), GFP_KERNEL))) return -ENOMEM;
 
     nm_sop->fake_sop = *(sb->s_op);
     nm_sop->orig_sop = sb->s_op;
@@ -913,44 +913,56 @@ static inline void nomount_hijack_superblock(struct super_block *sb)
         struct nm_xattr_proxy *proxies;
 
         while (sb->s_xattr[count]) count++;
-        if ((new_array = kmalloc((count + 1) * sizeof(void *) + (count * sizeof(*proxies)), GFP_KERNEL))) {
-            proxies = (void *)(new_array + count + 1);
-            new_array[count] = NULL;
-            for (int i = 0; i < count; i++) {
-                proxies[i].orig = sb->s_xattr[i];
-                proxies[i].fake = *sb->s_xattr[i];
-                if (proxies[i].fake.get) proxies[i].fake.get = nm_xattr_get;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0)
-                if (proxies[i].fake.__get) proxies[i].fake.__get = nm_xattr__get;
-#endif
-                if (proxies[i].fake.set) proxies[i].fake.set = nm_xattr_set;
-                new_array[i] = &proxies[i].fake;
-            }
-            nm_sop->orig_xattr = (const struct xattr_handler **)sb->s_xattr;
-            nm_sop->fake_xattr = new_array;
-            smp_store_release((const struct xattr_handler ***)&sb->s_xattr, new_array);
-            nm_debug("xattr handlers successfully hijacked for dev: 0x%x\n", sb->s_dev);
+        if (!(new_array = kmalloc((count + 1) * sizeof(void *) + (count * sizeof(*proxies)), GFP_KERNEL))) {
+            kfree(nm_sop);
+            return -ENOMEM;
         }
+        proxies = (void *)(new_array + count + 1);
+        new_array[count] = NULL;
+        for (int i = 0; i < count; i++) {
+            proxies[i].orig = sb->s_xattr[i];
+            proxies[i].fake = *sb->s_xattr[i];
+            if (proxies[i].fake.get) proxies[i].fake.get = nm_xattr_get;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0)
+            if (proxies[i].fake.__get) proxies[i].fake.__get = nm_xattr__get;
+#endif
+            if (proxies[i].fake.set) proxies[i].fake.set = nm_xattr_set;
+            new_array[i] = &proxies[i].fake;
+        }
+        nm_sop->orig_xattr = (const struct xattr_handler **)sb->s_xattr;
+        nm_sop->fake_xattr = new_array;
+        smp_store_release((const struct xattr_handler ***)&sb->s_xattr, new_array);
+        nm_debug("xattr handlers successfully hijacked for dev: 0x%x\n", sb->s_dev);
     }
 
     list_add_tail_rcu(&nm_sop->list, &nomount_sb_list);
     smp_store_release(&sb->s_op, &nm_sop->fake_sop);
     nm_debug("Superblock successfully hijacked for dev: 0x%x\n", sb->s_dev);
+    return 0;
 }
 
-static inline bool nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, struct inode *inode)
+static inline int nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, struct inode *inode)
 {
     const struct inode_operations *iop = smp_load_acquire(&inode->i_op);
     const struct file_operations *fop = smp_load_acquire(&inode->i_fop);
     struct nm_dir_ops *ops;
+    int err;
     bool iterate = fop && (fop->iterate_shared
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
         || fop->iterate
 #endif
     );
 
-    if (nm_get_nm_iop(iop) || nm_get_nm_fop(fop) || (!iop && !iterate) ||
-            !(ops = kmalloc(sizeof(*ops), GFP_KERNEL))) return false;
+    if ((ops = nm_get_nm_iop(iop)) || (ops = nm_get_nm_fop(fop))) {
+        if (ops->dir_node != dir_node) return -EBUSY;
+        return nomount_hijack_superblock(inode->i_sb);
+    }
+    if (!iop && !iterate) return -EOPNOTSUPP;
+    if (!(ops = kmalloc(sizeof(*ops), GFP_KERNEL))) return -ENOMEM;
+    if ((err = nomount_hijack_superblock(inode->i_sb))) {
+        kfree(ops);
+        return err;
+    }
 
     ops->orig_iop = iop;
     ops->orig_fop = fop;
@@ -973,7 +985,7 @@ static inline bool nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
     if (fop) smp_store_release(&inode->i_fop, &ops->fake_fop);
 
     nm_debug("Successfully hijacked VFS ops for parent dir (ino: %lu)\n", (unsigned long)inode->i_ino);
-    return true;
+    return 1;
 }
 
 static void nomount_hijack_dentry_ops(struct inode *dir, struct dentry *dentry, bool injected)
@@ -1243,12 +1255,15 @@ static int nomount_generate_virtual_topology(struct nomount_leaf *target, unsign
 
         if ((parent = nm_find_leaf(target->paths, parent_len))) {
             struct nm_rule *rule = nm_select_rule(parent, uid);
+            int hijacked = 0;
             if ((rule && !(rule->flags & NM_FLAG_IS_DIR)) || !parent->this_dir) { err = -ENOTDIR; break; }
+            if (parent->anchor.dentry && (hijacked = nomount_hijack_dir_ops(parent->this_dir, d_backing_inode(parent->anchor.dentry))) < 0) {
+                err = hijacked;
+                break;
+            }
             err = __nomount_inject_child_locked(parent->this_dir, child, name, name_len);
             if (!err && parent->anchor.dentry) {
-                bool hijacked = nomount_hijack_dir_ops(parent->this_dir, d_backing_inode(parent->anchor.dentry));
-                nomount_hijack_superblock(parent->anchor.dentry->d_sb);
-                if (hijacked) shrink_dcache_parent(parent->anchor.dentry);
+                if (hijacked > 0) shrink_dcache_parent(parent->anchor.dentry);
                 struct dentry *dentry = nm_hash_and_lookup(parent->anchor.dentry, &(struct qstr)QSTR_INIT(name, name_len));
                 if (dentry) { d_drop(dentry); dput(dentry); }
             }
@@ -1263,6 +1278,7 @@ static int nomount_generate_virtual_topology(struct nomount_leaf *target, unsign
         if (!found) {
             struct inode *inode = d_backing_inode(path.dentry);
             struct nomount_dir_node *dir = NULL;
+            int hijacked = 0;
             bool virtual = inode->i_op == &nm_dir_iops;
             if (!S_ISDIR(inode->i_mode)) {
                 err = -ENOTDIR;
@@ -1277,14 +1293,11 @@ static int nomount_generate_virtual_topology(struct nomount_leaf *target, unsign
                 else dir = __nomount_alloc_dir_node();
                 if (!dir) err = -ENOMEM;
             }
+            if (!err && !virtual && (hijacked = nomount_hijack_dir_ops(dir, inode)) < 0)
+                err = hijacked;
             if (!err && !(err = __nomount_inject_child_locked(dir, child, name, name_len))) {
-                bool hijacked = false;
-                if (!virtual) {
-                    if (!dir->owner && !dir->pinned_dentry) dir->pinned_dentry = dget(path.dentry);
-                    hijacked = nomount_hijack_dir_ops(dir, inode);
-                    nomount_hijack_superblock(path.dentry->d_sb);
-                }
-                if (hijacked) shrink_dcache_parent(path.dentry);
+                if (!virtual && !dir->owner && !dir->pinned_dentry) dir->pinned_dentry = dget(path.dentry);
+                if (hijacked > 0) shrink_dcache_parent(path.dentry);
                 struct dentry *child = nm_hash_and_lookup(path.dentry, &(struct qstr)QSTR_INIT(name, name_len));
                 if (child) { d_drop(child); dput(child); }
             }
