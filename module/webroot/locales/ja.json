@@ -39,8 +39,6 @@
   "modules_injected_files": "{{count}} 件のファイル",
   "modules_hot_load": "ホット ロード",
   "modules_hot_unload": "ホット アンロード",
-  "modules_skip": "Skip",
-  "modules_unskip": "Unskip",
   "unknown_value": "不明",
   "cancel": "キャンセル",
   "add": "追加",
@@ -81,5 +79,7 @@
   "select_custom_color": "カスタムカラーを選択",
   "advanced": "高度な設定",
   "advanced_color": "高度な色設定",
-  "done": "完了"
+  "done": "完了",
+  "modules_skip": "スキップ",
+  "modules_unskip": "スキップ解除"
 }

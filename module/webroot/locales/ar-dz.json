@@ -39,8 +39,6 @@
   "modules_injected_files": "{{count}} فيشي (ملف)",
   "modules_hot_load": "تحميل فوري",
   "modules_hot_unload": "تنحية فورية",
-  "modules_skip": "Skip",
-  "modules_unskip": "Unskip",
   "unknown_value": "مش معروف",
   "cancel": "أعقب (إلغاء)",
   "add": "زيد (إضافة)",
@@ -81,5 +79,7 @@
   "select_custom_color": "خير كولور مخصص",
   "advanced": "حوايج متقدمة",
   "advanced_color": "كولور متقدم",
-  "done": "خلاص (تم)"
+  "done": "خلاص (تم)",
+  "modules_skip": "Skip",
+  "modules_unskip": "Unskip"
 }

@@ -39,8 +39,6 @@
   "modules_injected_files": "{{count}} файлов",
   "modules_hot_load": "Горячая загрузка",
   "modules_hot_unload": "Горячая выгрузка",
-  "modules_skip": "Skip",
-  "modules_unskip": "Unskip",
   "unknown_value": "Неизвестно",
   "cancel": "Отмена",
   "add": "Добавить",
@@ -56,7 +54,7 @@
   "error_loading_modules": "Ошибка загрузки модулей",
   "clear_rules_toast": "Очищаем все правила...",
   "clear_rules_done": "Все правила очищены!",
-  "clear_uids_toast": "Clearing all UIDs...",
+  "clear_uids_toast": "Очистка всех UID...",
   "clear_uids_done": "Все UIDs очищены!",
   "clear_all_toast": "Удалить все правила и UIDs...",
   "clear_all_done": "Все правила и UIDs очищены!",
@@ -79,7 +77,9 @@
   "custom_color": "Цвет",
   "custom_color_desc": "Выбор основного цвета интерфейса",
   "select_custom_color": "Выбор цвета",
-  "advanced":"Настройка",
-  "advanced_color":"Настройка цвета",
-  "done":"Готово"
+  "advanced": "Настройка",
+  "advanced_color": "Настройка цвета",
+  "done": "Готово",
+  "modules_skip": "Пропустить",
+  "modules_unskip": "Не пропустить"
 }

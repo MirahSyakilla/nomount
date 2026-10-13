@@ -39,8 +39,6 @@
   "modules_injected_files": "{{count}} archivos",
   "modules_hot_load": "Cargar",
   "modules_hot_unload": "Descargar",
-  "modules_skip": "Omitir",
-  "modules_unskip": "No omitir",
   "unknown_value": "Desconocido",
   "cancel": "Cancelar",
   "add": "Añadir",
@@ -65,7 +63,7 @@
   "status_version": "Versión: {{version}}",
   "add_exclusion": "Agregar exclusión",
   "mode_lkm": "LKM",
-  "mode_builtin": "Built-in",
+  "mode_builtin": "Integrado",
   "module_version_label": "Versión del módulo",
   "appearance": "Apariencia",
   "theme_mode": "Tema",
@@ -81,5 +79,7 @@
   "select_custom_color": "Seleccionar color",
   "advanced": "Avanzado",
   "advanced_color": "Color Avanzado",
-  "done": "Hecho"
+  "done": "Hecho",
+  "modules_skip": "Omitir",
+  "modules_unskip": "No omitir"
 }
