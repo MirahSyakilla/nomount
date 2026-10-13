@@ -104,7 +104,7 @@ struct nm_rule {
 };
 
 struct nm_rule_array {
-    struct nm_rule_array *next;
+    struct rcu_head rcu;
     int count;
     struct nm_rule rules[];
 };
@@ -119,13 +119,8 @@ struct nomount_leaf {
     u16 v_len;
     u16 child_len;
     struct hlist_node ht_node;
-    struct nomount_leaf *next;
+    struct rcu_head rcu;
     char paths[];
-};
-
-struct nm_updates {
-    struct nm_rule_array *arrays;
-    struct nomount_leaf *leaves;
 };
 
 struct nm_rule_info {
