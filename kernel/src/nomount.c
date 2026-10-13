@@ -76,11 +76,11 @@ static struct nm_rule *nm_select_rule(struct nomount_leaf *leaf, unsigned int ui
     return fallback;
 }
 
-static bool __nomount_get_rule_info(struct nomount_dir_node *dir_node, const char *name, size_t len, uid_t fsuid, struct nm_rule_info *rule_info, bool get_refs)
+static struct nm_rule *nm_lookup_rule(struct nomount_dir_node *dir_node, const char *name, size_t len, uid_t fsuid, struct nomount_leaf **leaf_out)
 {
     struct nomount_child_array *children;
-    struct nm_rule *rule = NULL;
     struct nomount_leaf *leaf = NULL;
+    struct nm_rule *rule = NULL;
 
     if (likely((children = rcu_dereference(dir_node->children)))) {
         if (unlikely(nm_bloom_test(children, nm_qhash(name, len)))) {
@@ -88,28 +88,28 @@ static bool __nomount_get_rule_info(struct nomount_dir_node *dir_node, const cha
             leaf = nomount_bsearch_child(children, name, len, hash, NULL);
         }
     }
-
     if (leaf) rule = nm_select_rule(leaf, fsuid);
-    if (!rule) return false;
-
-    if (likely(rule_info)) {
-        rule_info->flags = rule->flags;
-        rule_info->v_ino = leaf->v_ino;
-        rule_info->r_path = rule->r_path;
-        if (get_refs && rule_info->r_path.dentry) path_get(&rule_info->r_path);
-        rule_info->this_dir = (rule->flags & NM_FLAG_IS_DIR) ? leaf->this_dir : NULL;
-        if (get_refs && rule_info->this_dir) atomic_inc(&rule_info->this_dir->refs);
-    }
-
-	return true;
+    if (rule && leaf_out) *leaf_out = leaf;
+    return rule;
 }
 
-static bool nomount_get_rule_info(struct nomount_dir_node *dir_node, const char *name, size_t len, struct nm_rule_info *rule_info, bool get_refs)
+static bool nm_resolve_rule(struct nomount_dir_node *dir_node, const char *name, size_t len, uid_t fsuid, struct nm_rule_info *out)
 {
-    bool found;
-    if (unlikely(!dir_node)) return false;
+    struct nomount_leaf *leaf = NULL;
+    struct nm_rule *rule;
+    bool found = false;
+
     rcu_read_lock();
-    found = __nomount_get_rule_info(dir_node, name, len, current_fsuid().val, rule_info, get_refs);
+    rule = nm_lookup_rule(dir_node, name, len, fsuid, &leaf);
+    if (rule) {
+        out->flags = rule->flags;
+        out->v_ino = leaf->v_ino;
+        out->r_path = rule->r_path;
+        out->this_dir = (rule->flags & NM_FLAG_IS_DIR) ? leaf->this_dir : NULL;
+        if (out->r_path.dentry) path_get(&out->r_path);
+        if (out->this_dir) atomic_inc(&out->this_dir->refs);
+        found = true;
+    }
     rcu_read_unlock();
     return found;
 }
@@ -170,10 +170,13 @@ static NM_ACTOR_RET nomount_actor_proxy(struct dir_context *ctx, const char *nam
     NM_ACTOR_RET ret;
 
     if (likely(proxy->dir_node != NULL)) {
-        if (unlikely(nomount_get_rule_info(proxy->dir_node, name, namelen, NULL, false))) {
+        rcu_read_lock();
+        if (unlikely(nm_lookup_rule(proxy->dir_node, name, namelen, current_fsuid().val, NULL) != NULL)) {
+            rcu_read_unlock();
             proxy->ctx.pos = offset;
             return NM_ACTOR_CONTINUE;
         }
+        rcu_read_unlock();
     }
 
     orig_ctx->pos = proxy->ctx.pos;
@@ -328,7 +331,7 @@ static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *
         uid_t fsuid = current_fsuid().val;
         if (likely(!nomount_is_uid_blocked(fsuid))) {
             struct nomount_dir_node *dir_node = rcu_dereference(nm_iop->dir_node);
-            if (dir_node) found = __nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, fsuid, &rule_info, true);
+            if (dir_node) found = nm_resolve_rule(dir_node, dentry->d_name.name, dentry->d_name.len, fsuid, &rule_info);
         }
     }
     rcu_read_unlock();
@@ -681,19 +684,13 @@ static struct dentry *nm_dir_lookup(struct inode *dir, struct dentry *dentry, un
     struct nomount_dir_node *dir_node;
     uid_t fsuid = current_fsuid().val;
     struct dentry *res;
-    bool found = false;
 
     if (unlikely(nomount_is_uid_blocked(fsuid)))
         goto negative_dentry;
 
-    if (info->dir_node) {
-        rcu_read_lock();
-        if ((dir_node = rcu_dereference(info->dir_node)))
-            found = __nomount_get_rule_info(dir_node, dentry->d_name.name, dentry->d_name.len, fsuid, &rule_info, true);
-        rcu_read_unlock();
-        if (found)
+    if (info->dir_node)
+        if ((dir_node = READ_ONCE(info->dir_node)) && nm_resolve_rule(dir_node, dentry->d_name.name, dentry->d_name.len, fsuid, &rule_info))
             return nm_materialize_rule(dir, dentry, &rule_info);
-    }
 
     if (!info->r_path.dentry)
         goto negative_dentry;
@@ -763,7 +760,7 @@ static int nm_d_revalidate_common(struct inode *parent_inode, const struct qstr 
     struct nomount_dir_node *parent_dir = NULL;
     const struct dentry_operations *orig_dops = NULL;
     struct inode *inode = READ_ONCE(dentry->d_inode);
-    struct nm_rule_info rule_info;
+    struct nomount_leaf *leaf = NULL;
     struct nm_dir_ops *iop = NULL;
     uid_t fsuid = current_fsuid().val;
     bool owned, has_rule = false, whiteout = false, match_rule = false;
@@ -780,12 +777,14 @@ static int nm_d_revalidate_common(struct inode *parent_inode, const struct qstr 
         parent_dir = rcu_dereference(iop->dir_node);
     }
 
-    if (!nomount_is_uid_blocked(fsuid) && parent_dir &&
-          (has_rule = __nomount_get_rule_info(parent_dir, name->name, name->len, fsuid, &rule_info, false))) {
-        if (rule_info.flags & NM_FLAG_WHITEOUT) {
-            whiteout = true;
-        } else if (inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops)) {
-            match_rule = nm_inode_matches_binding(inode, &rule_info.r_path, rule_info.this_dir);
+    if (!nomount_is_uid_blocked(fsuid) && parent_dir) {
+        struct nm_rule *rule = nm_lookup_rule(parent_dir, name->name, name->len, fsuid, &leaf);
+        if (rule) {
+            has_rule = true;
+            if (rule->flags & NM_FLAG_WHITEOUT)
+                whiteout = true;
+            else if (inode && (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops))
+                match_rule = nm_inode_matches_binding(inode, &rule->r_path, (rule->flags & NM_FLAG_IS_DIR) ? leaf->this_dir : NULL);
         }
     }
 
