@@ -32,6 +32,13 @@ static __always_inline bool nomount_is_uid_blocked(uid_t target_uid)
     return false;
 }
 
+static __always_inline bool nm_child_matches(struct nomount_leaf *leaf, const char *name, size_t len)
+{
+    if (unlikely(!leaf || leaf->child_len != len)) return false;
+    const char *child_name = nm_get_child_name(leaf);
+    return child_name[0] == name[0] && child_name[len - 1] == name[len - 1] && !memcmp(child_name, name, len);
+}
+
 static __always_inline struct nomount_leaf *nomount_bsearch_child(struct nomount_child_array *arr, const char *name, size_t len, u32 hash, int *index)
 {
 	struct nm_child *entries = nm_entries(arr);
@@ -45,13 +52,9 @@ static __always_inline struct nomount_leaf *nomount_bsearch_child(struct nomount
 	if (index) *index = l;
 	while (l < arr->count && entries[l].hash == hash) {
 		struct nomount_leaf *leaf = entries[l].leaf;
-		if (likely(leaf && leaf->child_len == len)) {
-			const char *child_name = nm_get_child_name(leaf);
-			if (child_name[0] == name[0] && child_name[len - 1] == name[len - 1] &&
-                    !memcmp(child_name, name, len)) {
-				if (index) *index = l;
-				return leaf;
-			}
+		if (nm_child_matches(leaf, name, len)) {
+			if (index) *index = l;
+			return leaf;
 		}
 		l++;
 	}
@@ -79,7 +82,16 @@ static struct nm_rule *nm_lookup_rule(struct nomount_dir_node *dir_node, const c
     struct nm_rule *rule = NULL;
 
     if (likely((children = rcu_dereference(dir_node->children)))) {
-        if (unlikely(nm_bloom_test(children, nm_qhash(name, len)))) {
+        u32 bloom_h = nm_qhash(name, len);
+        if (!children->bloom_words) {
+            struct nm_child *entries = nm_entries(children);
+            for (int i = 0; i < children->count; i++) {
+                if (entries[i].bloom_hash == bloom_h && nm_child_matches(entries[i].leaf, name, len)) {
+                    leaf = entries[i].leaf;
+                    break;
+                }
+            }
+        } else if (unlikely(nm_bloom_test(children, bloom_h))) {
             u32 hash = full_name_hash((const void *)(unsigned long)NOMOUNT_MAGIC_SIG, name, len);
             leaf = nomount_bsearch_child(children, name, len, hash, NULL);
         }
@@ -1100,14 +1112,16 @@ static int __nomount_inject_child_locked(struct nomount_dir_node *dir_node, stru
         memcpy(nm_entries(array), nm_entries(old), pos * sizeof(struct nm_child));
         memcpy(nm_entries(array) + pos + 1, nm_entries(old) + pos, (count - pos) * sizeof(struct nm_child));
     }
-    if (old && array->bloom_words == old->bloom_words) {
-        memcpy(array->bloom, old->bloom, old->bloom_words * sizeof(u64));
-    } else {
-        memset(array->bloom, 0, array->bloom_words * sizeof(u64));
-        for (int i = 0; i < count; i++)
-            nm_bloom_set(array, nm_entries(old)[i].bloom_hash);
+    if (array->bloom_words) {
+        if (old && array->bloom_words == old->bloom_words) {
+            memcpy(array->bloom, old->bloom, old->bloom_words * sizeof(u64));
+        } else {
+            memset(array->bloom, 0, array->bloom_words * sizeof(u64));
+            for (int i = 0; i < count; i++)
+                nm_bloom_set(array, nm_entries(old)[i].bloom_hash);
+        }
+        nm_bloom_set(array, bloom_h);
     }
-    nm_bloom_set(array, bloom_h);
     nm_entries(array)[pos] = (struct nm_child){ .hash = full_h, .bloom_hash = bloom_h, .leaf = leaf };
     leaf->child_len = name_len;
     leaf->parent_dir = dir_node;
@@ -1132,9 +1146,11 @@ static struct nomount_dir_node *__nomount_delete_child_locked(struct nomount_lea
             if (!(array = nm_alloc_child_array(new_count, nm_bloom_words_for(new_count)))) return ERR_PTR(-ENOMEM);
             memcpy(nm_entries(array), nm_entries(old), pos * sizeof(struct nm_child));
             memcpy(nm_entries(array) + pos, nm_entries(old) + pos + 1, (old->count - pos - 1) * sizeof(struct nm_child));
-            memset(array->bloom, 0, array->bloom_words * sizeof(u64));
-            for (int i = 0; i < array->count; i++)
-                nm_bloom_set(array, nm_entries(array)[i].bloom_hash);
+            if (array->bloom_words) {
+                memset(array->bloom, 0, array->bloom_words * sizeof(u64));
+                for (int i = 0; i < array->count; i++)
+                    nm_bloom_set(array, nm_entries(array)[i].bloom_hash);
+            }
         }
     }
     nm_publish_child_view(dir_node, array);

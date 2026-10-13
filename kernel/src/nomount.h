@@ -144,6 +144,7 @@ static inline struct nm_child *nm_entries(struct nomount_child_array *arr)
 
 static inline int nm_bloom_words_for(int count)
 {
+    if (count <= 2)   return 0;
     if (count <= 16)  return 4;
     if (count <= 64)  return 16;
     if (count <= 256) return 64;
