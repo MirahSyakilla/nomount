@@ -153,6 +153,7 @@ struct nomount_proxy_ctx {
     struct dir_context ctx;
     struct dir_context *orig_ctx;
     struct nomount_dir_node *dir_node;
+    uid_t fsuid;
     bool emitted;
 };
 
@@ -165,7 +166,7 @@ static NM_ACTOR_RET nomount_actor_proxy(struct dir_context *ctx, const char *nam
 
     if (likely(proxy->dir_node != NULL)) {
         rcu_guard();
-        if (unlikely(nm_lookup_rule(proxy->dir_node, name, namelen, current_fsuid().val, NULL) != NULL)) {
+        if (unlikely(nm_lookup_rule(proxy->dir_node, name, namelen, proxy->fsuid, NULL) != NULL)) {
             proxy->ctx.pos = offset;
             return NM_ACTOR_CONTINUE;
         }
@@ -373,6 +374,7 @@ static int nomount_hijacked_iterate_dir(struct file *file, struct dir_context *c
 
     proxy_ctx.ctx.pos = ctx->pos;
     proxy_ctx.orig_ctx = ctx;
+    proxy_ctx.fsuid = fsuid;
     proxy_ctx.dir_node = dir_node;
     res = nm_call_iterate(file, &proxy_ctx.ctx, orig_fop);
     ctx->pos = proxy_ctx.ctx.pos;
@@ -650,7 +652,7 @@ static int nm_dir_iterate_dir(struct file *file, struct dir_context *ctx)
 
         struct nomount_proxy_ctx proxy_ctx = {
             .ctx.actor = nomount_actor_proxy, .ctx.pos = ctx->pos, .orig_ctx = ctx,
-            .dir_node = dir_node, .emitted = false,
+            .dir_node = dir_node, .fsuid = fsuid, .emitted = false,
         };
         res = nm_call_iterate(real_file, &proxy_ctx.ctx, real_file->f_op);
         ctx->pos = proxy_ctx.ctx.pos;
