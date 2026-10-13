@@ -13,7 +13,6 @@ static bool nm_block_isolated_uids = false;
 static __always_inline bool nomount_is_uid_blocked(uid_t target_uid)
 {
     struct nm_uid_array *arr;
-    bool blocked = false;
 
     if (unlikely(READ_ONCE(nm_block_isolated_uids))) {
         uid_t app_id = target_uid % 100000U;
@@ -23,17 +22,14 @@ static __always_inline bool nomount_is_uid_blocked(uid_t target_uid)
     if (likely(!rcu_access_pointer(nomount_uids)))
         return false;
 
-    rcu_read_lock();
+    rcu_guard();
     if ((arr = rcu_dereference(nomount_uids)) && nm_uid_bloom_test(arr, target_uid)) {
         for (int i = 0; i < arr->count; i++) {
-            if (arr->uids[i] == target_uid) {
-                blocked = true;
-                break;
-            }
+            if (arr->uids[i] == target_uid)
+                return true;
         }
     }
-    rcu_read_unlock();
-    return blocked;
+    return false;
 }
 
 static __always_inline struct nomount_leaf *nomount_bsearch_child(struct nomount_child_array *arr, const char *name, size_t len, u32 hash, int *index)
@@ -97,9 +93,8 @@ static bool nm_resolve_rule(struct nomount_dir_node *dir_node, const char *name,
 {
     struct nomount_leaf *leaf = NULL;
     struct nm_rule *rule;
-    bool found = false;
 
-    rcu_read_lock();
+    rcu_guard();
     rule = nm_lookup_rule(dir_node, name, len, fsuid, &leaf);
     if (rule) {
         out->flags = rule->flags;
@@ -108,10 +103,9 @@ static bool nm_resolve_rule(struct nomount_dir_node *dir_node, const char *name,
         out->this_dir = (rule->flags & NM_FLAG_IS_DIR) ? leaf->this_dir : NULL;
         if (out->r_path.dentry) path_get(&out->r_path);
         if (out->this_dir) atomic_inc(&out->this_dir->refs);
-        found = true;
+        return true;
     }
-    rcu_read_unlock();
-    return found;
+    return false;
 }
 
 static void nm_dir_rcu_free(struct rcu_head *head)
@@ -170,13 +164,11 @@ static NM_ACTOR_RET nomount_actor_proxy(struct dir_context *ctx, const char *nam
     NM_ACTOR_RET ret;
 
     if (likely(proxy->dir_node != NULL)) {
-        rcu_read_lock();
+        rcu_guard();
         if (unlikely(nm_lookup_rule(proxy->dir_node, name, namelen, current_fsuid().val, NULL) != NULL)) {
-            rcu_read_unlock();
             proxy->ctx.pos = offset;
             return NM_ACTOR_CONTINUE;
         }
-        rcu_read_unlock();
     }
 
     orig_ctx->pos = proxy->ctx.pos;
@@ -1708,7 +1700,7 @@ static int nm_process_payload(unsigned long user_addr)
             buf_ptr = payload->buffer;
             buf_end = payload->buffer + sizeof(payload->buffer);
 
-            rcu_read_lock();
+            rcu_guard();
             struct nomount_leaf *leaf;
             hash_for_each_rcu(nomount_leaves_ht, bkt, leaf, ht_node) {
                 struct nm_rule_array *rules = rcu_dereference(leaf->rules);
@@ -1725,8 +1717,7 @@ static int nm_process_payload(unsigned long user_addr)
                     heap += r->r_len + 1;
                 }
             }
-list_done:
-            rcu_read_unlock();
+        list_done:
             payload->data_size = buf_ptr - payload->buffer;
             payload->arg1 = current_idx;
             break;
@@ -1738,13 +1729,12 @@ list_done:
             struct nm_uid_array *arr;
             int count = 0;
 
-            rcu_read_lock();
+            rcu_guard();
             if ((arr = rcu_dereference(nomount_uids))) {
                 while (start_idx < arr->count && count < (sizeof(payload->buffer) / sizeof(*out))) {
                     out[count++] = arr->uids[start_idx++];
                 }
             }
-            rcu_read_unlock();            
             payload->data_size = count * sizeof(*out);
             payload->arg1 = start_idx;
             break;
