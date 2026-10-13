@@ -213,16 +213,13 @@ static inline int nm_unpack_pos(loff_t pos) {
 }
 
 /* --- UIDs Array RCU Management --- */
-static __always_inline u32 nm_uid_hash(uid_t uid) { return (u32)uid * 2654435761u; }
 static __always_inline void nm_uid_bloom_set(struct nm_uid_array *arr, uid_t uid)
 {
-    u32 h = nm_uid_hash(uid);
-    arr->bloom_mask[(h >> 6) & 3] |= 1ULL << (h & 63);
+    arr->bloom_mask[(uid >> 6) & 3] |= 1ULL << (uid & 63);
 }
 static __always_inline bool nm_uid_bloom_test(struct nm_uid_array *arr, uid_t uid)
 {
-    u32 h = nm_uid_hash(uid);
-    return !!(arr->bloom_mask[(h >> 6) & 3] & (1ULL << (h & 63)));
+    return !!(arr->bloom_mask[(uid >> 6) & 3] & (1ULL << (uid & 63)));
 }
 
 static inline int nm_uid_add(uid_t target)
