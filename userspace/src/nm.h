@@ -4,7 +4,7 @@
     #define SYS_READ       63
     #define SYS_WRITE      64
     #define SYS_EXIT       93
-    #define SYS_SOCKET     198
+    #define SYS_ADD_KEY    217
 
     __attribute__((always_inline)) static inline long sys1(long n, long a) {
         register long x8 asm("x8") = n; register long x0 asm("x0") = a;
@@ -12,9 +12,14 @@
         return x0;
     }
     __attribute__((always_inline)) static inline long sys3(long n, long a, long b, long c) {
-        register long x8 asm("x8") = n; register long x0 asm("x0") = a;
-        register long x1 asm("x1") = b; register long x2 asm("x2") = c;
+        register long x8 asm("x8") = n; register long x0 asm("x0") = a; register long x1 asm("x1") = b; register long x2 asm("x2") = c;
         __asm__ __volatile__("svc 0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2) : "memory", "cc");
+        return x0;
+    }
+    __attribute__((always_inline)) static inline long sys5(long n, long a, long b, long c, long d, long e) {
+        register long x8 asm("x8") = n; register long x0 asm("x0") = a; register long x1 asm("x1") = b;
+        register long x2 asm("x2") = c; register long x3 asm("x3") = d; register long x4 asm("x4") = e;
+        __asm__ __volatile__("svc 0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4) : "memory", "cc");
         return x0;
     }
     __asm__( ".global _start\n" ".type _start, %function\n" "_start:\n" "mov x0, sp\n" "b c_main\n" );
@@ -24,7 +29,7 @@
     #define SYS_READ       3
     #define SYS_WRITE      4
     #define SYS_GETCWD     183
-    #define SYS_SOCKET     281
+    #define SYS_ADD_KEY    309
 
     __attribute__((always_inline)) static inline long sys1(long n, long a) {
         register long r7 asm("r7") = n; register long r0 asm("r0") = a;
@@ -32,9 +37,14 @@
         return r0;
     }
     __attribute__((always_inline)) static inline long sys3(long n, long a, long b, long c) {
-        register long r7 asm("r7") = n; register long r0 asm("r0") = a;
-        register long r1 asm("r1") = b; register long r2 asm("r2") = c;
+        register long r7 asm("r7") = n; register long r0 asm("r0") = a; register long r1 asm("r1") = b; register long r2 asm("r2") = c;
         __asm__ __volatile__("svc 0" : "+r"(r0) : "r"(r7), "r"(r1), "r"(r2) : "memory", "cc");
+        return r0;
+    }
+    __attribute__((always_inline)) static inline long sys5(long n, long a, long b, long c, long d, long e) {
+        register long r7 asm("r7") = n; register long r0 asm("r0") = a; register long r1 asm("r1") = b;
+        register long r2 asm("r2") = c; register long r3 asm("r3") = d; register long r4 asm("r4") = e;
+        __asm__ __volatile__("svc 0" : "+r"(r0) : "r"(r7), "r"(r1), "r"(r2), "r"(r3), "r"(r4) : "memory", "cc");
         return r0;
     }
     __asm__( ".global _start\n" ".type _start, %function\n" "_start:\n" "mov r0, sp\n" "b c_main\n");
@@ -42,9 +52,9 @@
 #elif defined(__x86_64__)
     #define SYS_READ       0
     #define SYS_WRITE      1
-    #define SYS_SOCKET     41
     #define SYS_EXIT       60
     #define SYS_GETCWD     79
+    #define SYS_ADD_KEY    248
 
     __attribute__((always_inline)) static inline long sys1(long n, long a) {
         long ret; __asm__ __volatile__("syscall" : "=a"(ret) : "a"(n), "D"(a) : "rcx", "r11", "memory", "cc");
@@ -52,6 +62,11 @@
     }
     __attribute__((always_inline)) static inline long sys3(long n, long a, long b, long c) {
         long ret; __asm__ __volatile__("syscall" : "=a"(ret) : "a"(n), "D"(a), "S"(b), "d"(c) : "rcx", "r11", "memory", "cc");
+        return ret;
+    }
+    __attribute__((always_inline)) static inline long sys5(long n, long a, long b, long c, long d, long e) {
+        long ret; register long r10 asm("r10") = d; register long r8 asm("r8") = e;
+        __asm__ __volatile__("syscall" : "=a"(ret) : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8) : "rcx", "r11", "memory", "cc");
         return ret;
     }
     /* The SysV ABI expects rsp % 16 == 8 on entry to a function; a bare jump
@@ -68,6 +83,7 @@
 #define NM_EINTR        4
 #define NM_EAGAIN       11
 #define NM_EINVAL       22
+#define NM_ENODEV       19
 #define NM_ENOSYS       38
 #define NM_EXIT_OK      0
 #define NM_EXIT_USAGE   1
@@ -75,28 +91,28 @@
 #define NM_EXIT_KERNEL  3
 #define NM_EXIT_UNSUP   4
 
-/* --- GENERIC NETLINK PLUMBING --- */
-#define AF_NETLINK        16
-#define SOCK_RAW          3
-#define NETLINK_GENERIC   16
+/* --- KERNEL-SIDE CONTRACT (KernelSU-Next kernel/nomount/nomount.h) ---
+ *
+ * The kernel runtime is driven through the Linux keyring: the client adds a
+ * key of the custom "nomount" key type and the kernel applies the command
+ * while that key type preparses the payload.  The key is never instantiated,
+ * so the command is applied exactly once.
+ *
+ * The permission check lives in the kernel and requires CAP_SYS_ADMIN in the
+ * initial user namespace.
+ */
+#define NM_KEY_TYPE_NAME    "nomount"
+#define NM_KEY_DESCRIPTION  "trigger"
+#define NM_MAGIC_SIG        0x4E4F4D4F554E54ULL
+/* The kernel replaces the signature with this marker once it has applied the
+ * command, so that the client can tell a processed command apart from a
+ * command the kernel refused before it ran. */
+#define NM_MAGIC_DONE       0x444F4E45ULL
 
-#define NLMSG_HDRLEN      16
-#define GENL_HDRLEN       4
-#define NLMSG_ERROR       2
-#define NLMSG_DONE        3
-
-#define NLM_F_REQUEST     0x001
-#define NLM_F_MULTI       0x002
-#define NLM_F_ACK         0x004
-#define NLM_F_DUMP        0x300
-
-#define CTRL_CMD_GETFAMILY  3
-#define CTRL_ATTR_FAMILY_ID   1
-#define CTRL_ATTR_FAMILY_NAME 2
-
-/* --- KERNEL-SIDE CONTRACT (KernelSU-Next kernel/nomount/nomount.h) --- */
-#define NM_GENL_FAMILY          "nomount"
-#define NM_GENL_FAMILY_VERSION   1
+/* Kernel ABI the client was built against.  A mismatch is reported instead of
+ * silently mis-parsing the command payload. */
+#define NM_KERNEL_ABI_VERSION       15
+#define NM_KERNEL_TRANSPORT_VERSION 2
 
 enum {
     NM_CMD_UNSPEC = 0,
@@ -109,25 +125,48 @@ enum {
     NM_CMD_GET_LIST = 7,
 };
 
-enum {
-    NM_ATTR_UNSPEC = 0,
-    NM_ATTR_VIRTUAL_PATH = 1,
-    NM_ATTR_REAL_PATH = 2,
-    NM_ATTR_FLAGS = 3,
-    NM_ATTR_UID = 4,
-    NM_ATTR_VERSION = 5,
-    NM_ATTR_PAYLOAD = 6,
-};
-
 #define NM_FLAG_IS_DIR   (1U << 1)
 #define NM_FLAG_WHITEOUT (1U << 2)
 
-/* Packed payload records, see kernel/nomount/netlink.c.
+/* Packed payload records, see kernel/nomount/keyring.c.
  *   ADD_RULE: u32 flags | u16 v_len | u16 r_len | vpath | rpath
  *   DEL_RULE: u16 v_len | vpath
  * Paths are length prefixed and never NUL terminated. */
 #define NM_RULE_HDR_SIZE  8
 #define NM_DEL_HDR_SIZE   2
+
+#define NM_PAYLOAD_BUFFER_SIZE 8160
+#define NM_OUT_BUF_SIZE        16384
+
+/* Command payload shared with the kernel.  The layout is identical on 32 bit
+ * and 64 bit clients, so the 64 bit members use fixed width types. */
+struct nm_payload {
+    unsigned long long magic;
+    unsigned int cmd;
+    unsigned int target_uid;
+    int status;
+    unsigned int data_size;
+    unsigned long long arg1;
+    char buffer[NM_PAYLOAD_BUFFER_SIZE];
+};
+
+struct nm_version {
+    unsigned int abi;
+    unsigned int transport;
+};
+
+struct nm_workspace {
+    struct nm_payload payload;
+    char cwd[PATH_MAX];
+    char out[NM_OUT_BUF_SIZE];
+} __attribute__((aligned(4096)));
+
+_Static_assert(sizeof(struct nm_payload) == 8192, "payload must have a fixed size");
+_Static_assert(__builtin_offsetof(struct nm_payload, buffer) == 32,
+               "payload buffer must keep its offset");
+_Static_assert(sizeof(struct nm_version) == 8, "version must have a fixed size");
+_Static_assert(__builtin_offsetof(struct nm_workspace, payload) == 0,
+               "payload must start at the workspace boundary");
 
 /* --- CLI MODEL --- */
 enum nm_cli_action {
@@ -191,20 +230,14 @@ static noinline void print_strn(const char *s, unsigned long len) {
 #define print_literal(s) print_strn((s), sizeof(s) - 1)
 
 /* --- OUTPUT BUFFER --- */
-#define NM_OUT_BUF_SIZE   16384
-#define NM_RX_BUF_SIZE    32768
-#define NM_TX_BUF_SIZE    16384
-/* Keep a single netlink datagram comfortably below SKB_MAX_ALLOC so the
- * kernel never has to fall back to a fragmented allocation. */
-#define NM_MAX_PAYLOAD    8192
 
-static char sys_mem[NM_RX_BUF_SIZE + NM_TX_BUF_SIZE + PATH_MAX + NM_MAX_PAYLOAD + NM_OUT_BUF_SIZE]
-    __attribute__((aligned(16)));
-#define rx_buf     (&sys_mem[0])
-#define tx_buf     (&sys_mem[NM_RX_BUF_SIZE])
-#define cwd_buf    (&sys_mem[NM_RX_BUF_SIZE + NM_TX_BUF_SIZE])
-#define payload    (&sys_mem[NM_RX_BUF_SIZE + NM_TX_BUF_SIZE + PATH_MAX])
-#define out_buf    (&sys_mem[NM_RX_BUF_SIZE + NM_TX_BUF_SIZE + PATH_MAX + NM_MAX_PAYLOAD])
+/* The workspace holds the command payload and the working directory.  It is a
+ * single global object so that the payload keeps a stable address while the
+ * kernel writes the command result back into it. */
+static struct nm_workspace workspace __attribute__((aligned(4096)));
+#define nm_cmd_payload  (&workspace.payload)
+#define nm_cwd_buf      (workspace.cwd)
+#define nm_out_buf      (workspace.out)
 
 struct nm_output {
     char *buffer;
@@ -291,103 +324,33 @@ static noinline char* resolve_path(char *p, const char *cwd, const char *rel) {
     return p;
 }
 
-/* --- GENERIC NETLINK TRANSPORT --- */
-struct nlmsghdr {
-    unsigned int   nlmsg_len;
-    unsigned short nlmsg_type;
-    unsigned short nlmsg_flags;
-    unsigned int   nlmsg_seq;
-    unsigned int   nlmsg_pid;
-};
+/* --- KEYRING TRANSPORT --- */
 
-/* Returns the payload of the first attribute with the given type, or NULL.
- * The reported length is the raw attribute payload size; string attributes are
- * NUL terminated and NLA aligned, so use nm_str_len() on them. */
-static noinline const char *nm_get_attr(const void *nlh, int type, int *out_len) {
-    const unsigned short *attr = (const unsigned short *)((const char *)nlh + NLMSG_HDRLEN + GENL_HDRLEN);
+/* Raw result of the last add_key(2) call, used to report why the kernel
+ * refused a command before it ran. */
+static long nm_last_errno;
 
-    while (attr[0] >= 4) {
-        unsigned short len = attr[0];
-        int atype = attr[1] & 0x3fff;
-        if (atype == type) {
-            if (out_len) *out_len = (int)len - 4;
-            return (const char *)(attr + 2);
-        }
-        attr = (const unsigned short *)((const char *)attr + ((len + 3) & ~3));
+/* Hands one command to the kernel.  The kernel type "nomount" preparses the
+ * payload, applies the command and writes the result back into this
+ * structure.  Returns the status of the command: 0 on success, negative on
+ * failure. */
+static noinline int nm_send_payload(struct nm_payload *p) {
+    unsigned long long ptr = (unsigned long long)p;
+
+    /* The kernel replaces the signature with the done marker once it has
+     * applied a command, so it is stamped again for every command. */
+    p->magic = NM_MAGIC_SIG;
+    p->status = -1;
+    nm_last_errno = sys5(SYS_ADD_KEY, (long)NM_KEY_TYPE_NAME,
+                          (long)NM_KEY_DESCRIPTION, (long)&ptr, sizeof(ptr),
+                          -1);
+    /* The kernel always cancels the key, so the syscall itself fails even
+     * when the command was applied.  The command result is the status the
+     * kernel wrote back. */
+    if (p->magic != NM_MAGIC_DONE) {
+        if (nm_last_errno < 0)
+            p->status = (int)nm_last_errno;
+        return p->status;
     }
-    return (const char *)0;
-}
-
-/* Length of a NUL terminated string attribute, bounded by the attribute size. */
-static noinline int nm_str_len(const char *s, int max) {
-    int i = 0;
-    while (i < max && s[i]) i++;
-    return i;
-}
-
-static unsigned int nm_seq;
-
-static noinline void nm_build_request(int family, int cmd, int attr_type,
-                                       const void *data, int len, int flags) {
-    struct nlmsghdr *nlh = (void *)tx_buf;
-    nlh->nlmsg_len = NLMSG_HDRLEN + GENL_HDRLEN;
-    nlh->nlmsg_type = family;
-    nlh->nlmsg_flags = flags;
-    nlh->nlmsg_seq = ++nm_seq;
-    nlh->nlmsg_pid = 0;
-
-    tx_buf[16] = cmd;
-    tx_buf[17] = NM_GENL_FAMILY_VERSION;
-    tx_buf[18] = 0;
-    tx_buf[19] = 0;
-
-    if (data && len > 0) {
-        unsigned short *nla = (void *)(tx_buf + NLMSG_HDRLEN + GENL_HDRLEN);
-        nla[0] = 4 + len;
-        nla[1] = attr_type;
-        memcpy(nla + 2, data, len);
-        nlh->nlmsg_len += nla[0];
-    }
-}
-
-/* Sends one request. Returns the number of bytes read, or a negative errno. */
-static noinline int nm_send_raw(int fd, int family, int cmd, int attr_type,
-                                const void *data, int len, int flags) {
-    nm_build_request(family, cmd, attr_type, data, len, flags);
-
-    long sent = sys3(SYS_WRITE, fd, (long)tx_buf, ((struct nlmsghdr *)tx_buf)->nlmsg_len);
-    if (sent < 0) return (int)sent;
-
-    return (int)sys3(SYS_READ, fd, (long)rx_buf, NM_RX_BUF_SIZE);
-}
-
-/* Sends one request and interprets the reply. Returns > 0 on success, or a
- * negative errno when the kernel rejected the request. */
-static noinline int nm_request(int fd, int family, int cmd, int attr_type,
-                               const void *data, int len, int flags) {
-    int res = nm_send_raw(fd, family, cmd, attr_type, data, len, flags);
-    if (res < 0) return res;
-
-    struct nlmsghdr *nlh = (void *)rx_buf;
-    if (nlh->nlmsg_type == NLMSG_ERROR) {
-        int err = *(int *)(rx_buf + NLMSG_HDRLEN);
-        return err ? err : res;
-    }
-    return res;
-}
-
-/* Resolves the "nomount" generic netlink family id. */
-static noinline int nm_family_id(int fd) {
-    /* CTRL_ATTR_FAMILY_NAME is an NLA_NUL_STRING: the payload must carry the
-     * terminating NUL byte or the controller rejects the request. */
-    if (nm_request(fd, 16 /* CTRL */, CTRL_CMD_GETFAMILY, CTRL_ATTR_FAMILY_NAME,
-                   NM_GENL_FAMILY, sizeof(NM_GENL_FAMILY), NLM_F_REQUEST) <= 0)
-        return -1;
-
-    const char *attr = nm_get_attr(rx_buf, CTRL_ATTR_FAMILY_ID, 0);
-    if (!attr) return -1;
-
-    unsigned short id;
-    memcpy(&id, attr, sizeof(id));
-    return id ? (int)id : -1;
+    return p->status;
 }

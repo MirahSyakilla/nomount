@@ -44,17 +44,17 @@ else
   ui_print "- Detected Kernel: $KVER (Custom/Unknown branch)"
 fi
 
-ui_print "- Checking Kernel support via Netlink..."
+ui_print "- Checking Kernel support via the keyring transport..."
 
 if "$MODPATH/bin/nm" version > /dev/null 2>&1; then
-  ui_print "  [OK] NoMount Netlink interface detected."
+  ui_print "  [OK] NoMount keyring interface detected."
   ui_print "  [OK] System is ready for injection."
 else
   ui_print " "
   ui_print "***************************************************"
   ui_print "* [!] WARNING: KERNEL DRIVER NOT DETECTED         *"
   ui_print "***************************************************"
-  ui_print "* The NoMount Netlink interface is unresponsive.  *"
+  ui_print "* The NoMount keyring interface is unresponsive.  *"
   ui_print "* *"
   ui_print "* This module will NOT FUNCTION until you flash   *"
   ui_print "* a Kernel compiled with KSU_KPROBES_NOMOUNT=y   *"

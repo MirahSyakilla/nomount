@@ -13,7 +13,7 @@ TARGET_PARTITIONS="system system_ext vendor odm product apex oem optics prism
 echo "=== NoMount Injection | Started: $(date) ===" >> "$LOG_FILE"
 
 if ! "$LOADER" version > /dev/null 2>&1; then
-    echo "[FATAL] NoMount Netlink interface missing/unresponsive; skipping rule injection." >> "$LOG_FILE"
+    echo "[FATAL] NoMount keyring interface missing/unresponsive; skipping rule injection." >> "$LOG_FILE"
     exit 1
 fi
 

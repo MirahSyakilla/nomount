@@ -35,16 +35,16 @@ fi
 touch "$BOOT_SEMAPHORE"
 
 # The NoMount runtime is compiled into KernelSU-Next, so there is no loadable
-# kernel module to insert here; only the Generic Netlink family is probed.
-echo "[INFO] Checking NoMount kernel support via Generic Netlink..." >> "$LOG_FILE"
+# kernel module to insert here; only the keyring transport is probed.
+echo "[INFO] Checking NoMount kernel support via the keyring transport..." >> "$LOG_FILE"
 if ! "$LOADER" version > /dev/null 2>&1; then
-    echo "[FATAL] NoMount Netlink interface missing/unresponsive." >> "$LOG_FILE"
+    echo "[FATAL] NoMount keyring interface missing/unresponsive." >> "$LOG_FILE"
     touch "$MODDIR/disable"
     sed -i "s|^description=.*|description=[❌ ERROR: Kernel not patched] \\\\n$BASE_DESC|" "$PROP_FILE"
     rm -f "$BOOT_SEMAPHORE"
     exit 1
 fi
-echo "[OK] Netlink socket responding properly." >> "$LOG_FILE"
+echo "[OK] NoMount keyring interface responding properly." >> "$LOG_FILE"
 
 # Apply the rules of every other module.
 sh "$MODDIR/metamount.sh"

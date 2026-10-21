@@ -2,9 +2,15 @@
  * nm.c - NoMount CLI Userspace Tool
  *
  * Talks to the hookless NoMount runtime that ships inside KernelSU-Next.
- * The kernel side speaks Generic Netlink (family "nomount", version 1); the
- * command and attribute numbers below mirror kernel/nomount/nomount.h and the
- * packed payload layout mirrors kernel/nomount/netlink.c.
+ * The kernel side is driven through the Linux keyring: the command payload is
+ * handed to the kernel with add_key(2) using the custom "nomount" key type,
+ * and the kernel applies the command while that key type preparses the
+ * payload.  The permission check in the kernel requires CAP_SYS_ADMIN in the
+ * initial user namespace.
+ *
+ * The command numbers below mirror kernel/nomount/nomount.h and the packed
+ * payload layout mirrors kernel/nomount/keyring.c.  Rules are global: one
+ * rule per virtual path, matched exactly or as a directory prefix.
  */
 #include "nm.h"
 
@@ -70,93 +76,155 @@ static noinline void report_unsupported(const char *feature) {
     print_literal(" is not supported by the KernelSU-Next hookless NoMount kernel\n");
 }
 
-/* Streams the rule list out of the kernel and renders it as text or JSON. */
-static noinline int nm_dump_rules(int fd, int family, struct nm_output *out, int is_json) {
-    int res = nm_send_raw(fd, family, NM_CMD_GET_LIST, 0, 0, 0, NLM_F_REQUEST | NLM_F_DUMP);
-    if (res < 0) return res;
+static noinline void report_errno(const char *what, int err) {
+    print_literal("nm: ");
+    print_strn(what, strlen(what));
+    print_literal(" failed (errno ");
+    struct nm_output out = { nm_out_buf, 0, NM_OUT_BUF_SIZE };
+    list_print_uint(&out, err < 0 ? -err : err);
+    list_print_literal(&out, ")\n");
+    list_flush(&out);
+}
 
-    int offset = 2;
-    int started = 0;
+/*
+ * Asks the kernel for its ABI version.  A mismatch is reported instead of
+ * letting the command payload be mis-parsed, and a missing key type is
+ * reported as the kernel not providing the runtime at all.
+ */
+static noinline int nm_query_version(struct nm_version *version) {
+    nm_cmd_payload->magic = NM_MAGIC_SIG;
+    nm_cmd_payload->cmd = NM_CMD_GET_VERSION;
+    nm_cmd_payload->target_uid = 0;
+    nm_cmd_payload->arg1 = 0;
+    nm_cmd_payload->data_size = 0;
+    nm_cmd_payload->status = -1;
 
-    while (res > 0) {
-        int remaining = res;
-        char *cursor = rx_buf;
-
-        while (remaining >= (int)sizeof(struct nlmsghdr)) {
-            struct nlmsghdr *nlh = (void *)cursor;
-            int v_len = 0, r_len = 0, f_len = 0;
-            const char *v, *r, *f;
-            unsigned int flags = 0;
-
-            if (nlh->nlmsg_len < sizeof(struct nlmsghdr) ||
-                nlh->nlmsg_len > (unsigned int)remaining)
-                break;
-            if (nlh->nlmsg_type == NLMSG_DONE)
-                goto list_done;
-            if (nlh->nlmsg_type == NLMSG_ERROR) {
-                int err = *(int *)(cursor + NLMSG_HDRLEN);
-                return err ? err : NM_EINVAL;
-            }
-
-            v = nm_get_attr(nlh, NM_ATTR_VIRTUAL_PATH, &v_len);
-            r = nm_get_attr(nlh, NM_ATTR_REAL_PATH, &r_len);
-            f = nm_get_attr(nlh, NM_ATTR_FLAGS, &f_len);
-            if (f && f_len >= 4) memcpy(&flags, f, 4);
-
-            if (v && v_len > 0) {
-                v_len = nm_str_len(v, v_len);
-                if (r && r_len > 0) r_len = nm_str_len(r, r_len);
-                if (v_len <= 0) {
-                    remaining -= nlh->nlmsg_len;
-                    cursor += nlh->nlmsg_len;
-                    continue;
-                }
-
-                int is_whiteout = (flags & NM_FLAG_WHITEOUT) != 0;
-                int is_virtual_dir = (flags & NM_FLAG_IS_DIR) != 0;
-
-                if (!started) {
-                    started = 1;
-                    if (is_json) list_print_literal(out, "[\n");
-                }
-
-                if (is_json) {
-                    list_print_literal_offset(out, ",\n  {\n    \"virtual\": \"", offset);
-                    offset = 0;
-                    list_print_json_strn(out, v, v_len);
-                    if (is_whiteout) {
-                        list_print_literal(out, "\",\n    \"whiteout\": true");
-                    } else {
-                        list_print_literal(out, "\",\n    \"real\": \"");
-                        list_print_json_strn(out, r, r_len);
-                        list_print_literal(out, "\"");
-                        if (is_virtual_dir)
-                            list_print_literal(out, ",\n    \"virtual_dir\": true");
-                    }
-                    list_print_literal(out, "\n  }");
-                } else {
-                    list_print_strn(out, v, v_len);
-                    if (is_whiteout) {
-                        list_print_literal(out, " (whiteout)");
-                    } else {
-                        list_print_literal(out, " -> ");
-                        list_print_strn(out, r, r_len);
-                        if (is_virtual_dir)
-                            list_print_literal(out, " (virtual dir)");
-                    }
-                    list_print_literal(out, "\n");
-                }
-            }
-
-            remaining -= nlh->nlmsg_len;
-            cursor += nlh->nlmsg_len;
+    if (nm_send_payload(nm_cmd_payload) < 0) {
+        if (nm_last_errno == -NM_ENODEV || nm_last_errno == -NM_ENOSYS) {
+            print_literal("nm: the kernel does not provide the NoMount key type; "
+                          "reboot into a kernel with the hookless NoMount runtime\n");
+        } else {
+            report_errno("the NoMount keyring command", (int)nm_last_errno);
         }
-
-        res = (int)sys3(SYS_READ, fd, (long)rx_buf, NM_RX_BUF_SIZE);
-        if (res == -NM_EINTR) { res = 0; break; }
+        return -1;
+    }
+    if (nm_cmd_payload->data_size < sizeof(struct nm_version)) {
+        print_literal("nm: the kernel returned a malformed version\n");
+        return -1;
     }
 
-list_done:
+    memcpy(version, nm_cmd_payload->buffer, sizeof(*version));
+    return 0;
+}
+
+static noinline int nm_check_kernel(struct nm_version *version) {
+    if (nm_query_version(version) < 0)
+        return -1;
+
+    struct nm_output out = { nm_out_buf, 0, NM_OUT_BUF_SIZE };
+
+    if (version->abi != NM_KERNEL_ABI_VERSION) {
+        print_literal("nm: kernel ABI version ");
+        list_print_uint(&out, version->abi);
+        list_print_literal(&out, " does not match the client ABI version ");
+        list_print_uint(&out, NM_KERNEL_ABI_VERSION);
+        list_print_literal(&out, "\n");
+        list_flush(&out);
+        return -1;
+    }
+    if (version->transport != NM_KERNEL_TRANSPORT_VERSION) {
+        print_literal("nm: kernel transport version ");
+        list_print_uint(&out, version->transport);
+        list_print_literal(&out, " does not match the client transport version ");
+        list_print_uint(&out, NM_KERNEL_TRANSPORT_VERSION);
+        list_print_literal(&out, "\n");
+        list_flush(&out);
+        return -1;
+    }
+    return 0;
+}
+
+/* Streams the rule list out of the kernel and renders it as text or JSON. */
+static noinline int nm_dump_rules(struct nm_output *out, int is_json) {
+    int offset = 2;
+    int started = 0;
+    unsigned long long token = ~0ULL;
+    unsigned int pages = 0;
+
+    nm_cmd_payload->cmd = NM_CMD_GET_LIST;
+    nm_cmd_payload->arg1 = 0;
+
+    for (;;) {
+        int res = nm_send_payload(nm_cmd_payload);
+        if (res < 0) return res;
+        if (nm_cmd_payload->data_size == 0) break;
+        /* The kernel advances the continuation token with every page.  Stop
+         * when it does not, so that a kernel that keeps returning the same
+         * page cannot spin this loop forever. */
+        if (nm_cmd_payload->arg1 == token) break;
+        token = nm_cmd_payload->arg1;
+        if (++pages > 4096) break;
+
+        char *data = nm_cmd_payload->buffer;
+        unsigned int used = 0;
+        unsigned int size = nm_cmd_payload->data_size;
+
+        while (used + NM_RULE_HDR_SIZE <= size) {
+            unsigned int flags = 0;
+            unsigned short v_len = 0, r_len = 0;
+            const char *v, *r;
+
+            memcpy(&flags, data + used, sizeof(flags));
+            memcpy(&v_len, data + used + 4, sizeof(v_len));
+            memcpy(&r_len, data + used + 6, sizeof(r_len));
+            used += NM_RULE_HDR_SIZE;
+
+            if (used + v_len + r_len > size) break;
+
+            v = data + used;
+            used += v_len;
+            r = data + used;
+            used += r_len;
+
+            if (v_len == 0) continue;
+
+            int is_whiteout = (flags & NM_FLAG_WHITEOUT) != 0;
+            int is_virtual_dir = (flags & NM_FLAG_IS_DIR) != 0;
+
+            if (!started) {
+                started = 1;
+                if (is_json) list_print_literal(out, "[\n");
+            }
+
+            if (is_json) {
+                list_print_literal_offset(out, ",\n  {\n    \"virtual\": \"", offset);
+                offset = 0;
+                list_print_json_strn(out, v, v_len);
+                if (is_whiteout) {
+                    list_print_literal(out, "\",\n    \"whiteout\": true");
+                } else {
+                    list_print_literal(out, "\",\n    \"real\": \"");
+                    list_print_json_strn(out, r, r_len);
+                    list_print_literal(out, "\"");
+                    if (is_virtual_dir)
+                        list_print_literal(out, ",\n    \"virtual_dir\": true");
+                }
+                list_print_literal(out, "\n  }");
+            } else {
+                list_print_strn(out, v, v_len);
+                if (is_whiteout) {
+                    list_print_literal(out, " (whiteout)");
+                } else {
+                    list_print_literal(out, " -> ");
+                    list_print_strn(out, r, r_len);
+                    if (is_virtual_dir)
+                        list_print_literal(out, " (virtual dir)");
+                }
+                list_print_literal(out, "\n");
+            }
+        }
+    }
+
     if (is_json) {
         if (!started) list_print_literal(out, "[\n");
         list_print_literal(out, "\n]\n");
@@ -173,6 +241,7 @@ void c_main(long *sp) {
     int exit_code = NM_EXIT_OK;
 
     struct nm_args args;
+    struct nm_version version;
     parse_arguments(argc, argv, &args);
 
     if (args.action == ACTION_NONE) {
@@ -233,11 +302,26 @@ void c_main(long *sp) {
             break;
     }
 
-    int fd = sys3(SYS_SOCKET, AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
-    if (fd < 0) { exit_code = NM_EXIT_IO; goto do_exit; }
+    nm_cmd_payload->magic = NM_MAGIC_SIG;
 
-    int family = nm_family_id(fd);
-    if (family < 0) { exit_code = NM_EXIT_KERNEL; goto do_exit; }
+    if (args.action == ACTION_VERSION) {
+        if (nm_query_version(&version) < 0) {
+            exit_code = NM_EXIT_KERNEL;
+            goto do_exit;
+        }
+        struct nm_output out = { nm_out_buf, 0, NM_OUT_BUF_SIZE };
+        list_print_uint(&out, version.abi);
+        list_print_literal(&out, "\n");
+        list_flush(&out);
+        goto do_exit;
+    }
+
+    /* Every other command first makes sure that the kernel speaks the same
+     * ABI, so that a mismatched pair is detected instead of mis-parsed. */
+    if (nm_check_kernel(&version) < 0) {
+        exit_code = NM_EXIT_KERNEL;
+        goto do_exit;
+    }
 
     switch (args.action) {
         case ACTION_RULE_ADD:
@@ -245,11 +329,15 @@ void c_main(long *sp) {
             int step = (args.action == ACTION_RULE_ADD && !args.is_whiteout) ? 2 : 1;
             if (p_count < step) goto do_exit;
 
-            const char *cwd = (sys3(SYS_GETCWD, (long)cwd_buf, PATH_MAX, 0) > 0) ? cwd_buf : "/";
+            const char *cwd = (sys3(SYS_GETCWD, (long)nm_cwd_buf, PATH_MAX, 0) > 0) ? nm_cwd_buf : "/";
             int target_cmd = (args.action == ACTION_RULE_DEL) ? NM_CMD_DEL_RULE : NM_CMD_ADD_RULE;
             int header_size = (target_cmd == NM_CMD_ADD_RULE) ? NM_RULE_HDR_SIZE : NM_DEL_HDR_SIZE;
-            char *cursor = payload;
+            char *cursor = nm_cmd_payload->buffer;
             int pending = 0;
+
+            nm_cmd_payload->cmd = target_cmd;
+            nm_cmd_payload->arg1 = 0;
+            nm_cmd_payload->data_size = 0;
 
             for (int i = 0; i + step - 1 < p_count; i += step) {
                 int v_len = resolved_path_length(cwd, argv[i]);
@@ -262,13 +350,13 @@ void c_main(long *sp) {
                 }
 
                 int record_size = header_size + v_len + r_len;
-                if (record_size > NM_MAX_PAYLOAD) { exit_code = NM_EXIT_USAGE; continue; }
+                if (record_size > NM_PAYLOAD_BUFFER_SIZE) { exit_code = NM_EXIT_USAGE; continue; }
 
-                if (pending + record_size > NM_MAX_PAYLOAD) {
-                    int res = nm_request(fd, family, target_cmd, NM_ATTR_PAYLOAD,
-                                         payload, pending, NLM_F_REQUEST | NLM_F_ACK);
+                if (pending + record_size > NM_PAYLOAD_BUFFER_SIZE) {
+                    nm_cmd_payload->data_size = pending;
+                    int res = nm_send_payload(nm_cmd_payload);
                     if (res < 0) exit_code = NM_EXIT_KERNEL;
-                    cursor = payload;
+                    cursor = nm_cmd_payload->buffer;
                     pending = 0;
                 }
 
@@ -297,8 +385,8 @@ void c_main(long *sp) {
             }
 
             if (pending) {
-                int res = nm_request(fd, family, target_cmd, NM_ATTR_PAYLOAD,
-                                     payload, pending, NLM_F_REQUEST | NLM_F_ACK);
+                nm_cmd_payload->data_size = pending;
+                int res = nm_send_payload(nm_cmd_payload);
                 if (res < 0) exit_code = NM_EXIT_KERNEL;
             }
             break;
@@ -312,44 +400,29 @@ void c_main(long *sp) {
             for (int i = 0; i < p_count; i++) {
                 unsigned int uid = 0;
                 if (parse_uid(argv[i], &uid) != 0) { exit_code = NM_EXIT_USAGE; continue; }
-                int res = nm_request(fd, family, target_cmd, NM_ATTR_UID,
-                                     &uid, sizeof(uid), NLM_F_REQUEST | NLM_F_ACK);
+                nm_cmd_payload->cmd = target_cmd;
+                nm_cmd_payload->target_uid = uid;
+                nm_cmd_payload->arg1 = 0;
+                nm_cmd_payload->data_size = 0;
+                int res = nm_send_payload(nm_cmd_payload);
                 if (res < 0) exit_code = NM_EXIT_KERNEL;
             }
             break;
         }
 
         case ACTION_CLEAR_ALL: {
-            int res = nm_request(fd, family, NM_CMD_CLEAR_ALL, 0, 0, 0,
-                                 NLM_F_REQUEST | NLM_F_ACK);
+            nm_cmd_payload->cmd = NM_CMD_CLEAR_ALL;
+            nm_cmd_payload->target_uid = 0;
+            nm_cmd_payload->arg1 = 0;
+            nm_cmd_payload->data_size = 0;
+            int res = nm_send_payload(nm_cmd_payload);
             if (res < 0) exit_code = NM_EXIT_KERNEL;
             break;
         }
 
-        case ACTION_VERSION: {
-            int res = nm_request(fd, family, NM_CMD_GET_VERSION, 0, 0, 0,
-                                 NLM_F_REQUEST | NLM_F_ACK);
-            if (res > 0) {
-                int len = 0;
-                const char *ver = nm_get_attr(rx_buf, NM_ATTR_VERSION, &len);
-                if (ver && len >= 4) {
-                    unsigned int value = 0;
-                    memcpy(&value, ver, sizeof(value));
-
-                    struct nm_output out = { out_buf, 0, NM_OUT_BUF_SIZE };
-                    list_print_uint(&out, value);
-                    list_print_literal(&out, "\n");
-                    list_flush(&out);
-                    break;
-                }
-            }
-            exit_code = NM_EXIT_KERNEL;
-            break;
-        }
-
         case ACTION_RULE_LIST: {
-            struct nm_output out = { out_buf, 0, NM_OUT_BUF_SIZE };
-            if (nm_dump_rules(fd, family, &out, args.is_json) < 0)
+            struct nm_output out = { nm_out_buf, 0, NM_OUT_BUF_SIZE };
+            if (nm_dump_rules(&out, args.is_json) < 0)
                 exit_code = NM_EXIT_KERNEL;
             break;
         }

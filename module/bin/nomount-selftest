@@ -138,10 +138,10 @@ if [ ! -x "$NM_BIN" ]; then
     fail "nm binary missing at $NM_BIN"
 fi
 
-stage "probe netlink version and rule-list capability"
+stage "probe keyring version and rule-list capability"
 VERSION="$($NM_BIN v 2>/dev/null | tr -d '\r\n')"
 [ -n "$VERSION" ] || fail "nomount version query failed"
-pass "netlink version query responded with '$VERSION'"
+pass "keyring version query responded with '$VERSION'"
 case "$VERSION" in
     ''|*[!0-9]*) CAN_LIST=0 ;;
     *) [ "$VERSION" -ge 13 ] && CAN_LIST=1 ;;

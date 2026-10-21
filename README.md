@@ -54,9 +54,12 @@ Instead of applying global hooks in-kernel that affect the whole system, NoMount
 NoMount also takes control of directory iteration. This allows you to inject entirely new files into existing system directories or completely hide existing ones (known as whiteouts). When an app or a terminal command like `ls` tries to list the contents of a directory, NoMount dynamically injects the new entries or omits the hidden ones, reflecting the changes in file lists and system calls. Also NoMount includes a dedicated UID filter. Before any path interception occurs, NoMount checks the process ID of the application making the request. If the app's UID is flagged (such as a banking app or an root detector), NoMount simply steps aside and lets the kernel resolve the path normally. The isolated app will see the stock, untouched filesystem.
 
 This approach makes NoMount highly compatible with both read-only partitions (like `erofs`) and read-write partitions (like `ext4`), because the underlying partition is never modified. In this fork the NoMount runtime is built into KernelSU-Next, and all communication between the
-userspace tool and the kernel is handled over the **Generic Netlink** family `nomount`
-(version 1), completely bypassing the complications of traditional `/dev` nodes and IOCTL
-commands. The upstream keyring transport is not used here.
+userspace tool and the kernel is handled over the **Linux keyring**: the client adds a key of
+the custom `nomount` key type with `add_key(2)`, and the kernel applies the command while
+that key type preparses the payload. This is the same transport upstream NoMount uses, and it
+requires `CAP_SYS_ADMIN` in the initial user namespace, so an unprivileged app cannot
+install NoMount rules. The transport completely bypasses the complications of traditional
+`/dev` nodes and IOCTL commands.
 
 ## How to Use It (Metamodule)
 
@@ -81,8 +84,8 @@ CONFIG_KSU_KPROBES_NOMOUNT=y
 ```
 
 The upstream standalone kernel tree (and its LKMs) is not compatible with this
-module: upstream drives the kernel through the keyring, this fork drives it
-over Generic Netlink.
+module: this fork drives the kernel through the keyring transport, but with
+its own global rule model and its own payload layout.
 
 ### How to Install the NoMount Metamodule
 
