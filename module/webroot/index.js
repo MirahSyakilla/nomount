@@ -2,15 +2,23 @@
 let _cbId = 0;
 function exec(cmd) {
     return new Promise((resolve) => {
-        const key = `_ksu_cb_${Date.now()}_${_cbId++}`;
+        const key = `_nm_cb_${Date.now()}_${_cbId++}`;
+        const cleanup = () => { delete window[key]; };
         window[key] = (errno, stdout, stderr) => {
-            delete window[key];
+            cleanup();
             resolve({ errno, stdout: stdout || '', stderr: stderr || '' });
         };
-        if (typeof ksu !== 'undefined' && ksu.exec) {
-            try { ksu.exec(cmd, '{}', key); } 
-            catch (e) { delete window[key]; resolve({ errno: 1, stdout: '', stderr: e?.message || 'failed' }); }
-        } else resolve({ errno: 1, stdout: '', stderr: 'ksu not defined' });
+        try {
+            if (typeof ksu !== 'undefined' && ksu.exec) {
+                ksu.exec(cmd, '{}', key);
+            } else {
+                cleanup();
+                resolve({ errno: 1, stdout: '', stderr: 'ksu not defined' });
+            }
+        } catch (e) {
+            cleanup();
+            resolve({ errno: 1, stdout: '', stderr: e?.message || 'failed' });
+        }
     });
 }
 
@@ -25,22 +33,55 @@ const LOCALE_NAMES = {
     en: 'English',
     es: 'Español',
     id: 'Bahasa Indonesia',
+    de: 'Deutsch',
     zh: '简体中文',
     ru: 'Русский',
-    tr: 'Türkçe'
+    pl: 'Polski',
+    tr: 'Türkçe',
+    vi: 'Tiếng Việt',
+    bn: 'বাংলা',
+    ja: '日本語',
+    ar: 'العربية',
+    'ar-dz': 'العربية (الدارجة الجزائرية)'
 };
+const RTL_LOCALES = new Set(['ar', 'ar-dz']);
+
+const numberFormatterCache = Object.create(null);
+
+function formatNumber(value) {
+    let formatter = numberFormatterCache[activeLocale];
+
+    if (!formatter) {
+        formatter = new Intl.NumberFormat(activeLocale);
+        numberFormatterCache[activeLocale] = formatter;
+    }
+
+    return formatter.format(value);
+}
+
 let activeLocale = 'en', translations = {};
 
 const TPL_RE = /{{\s*([^\s}]+(?:[ \t]+[^\s}]+)*)\s*}}/g;
 const translate = (key, reps) => {
     const str = translations[key] ?? key;
-    return reps ? String(str).replace(TPL_RE, (_, n) => reps[n] ?? '') : str;
+
+    return reps
+        ? String(str).replace(TPL_RE, (_, n) => {
+            const value = reps[n];
+
+            if (typeof value === 'number') {
+                return formatNumber(value);
+            }
+
+            return value ?? '';
+        })
+        : str;
 };
 
 const translationsCache = {}; 
 let cachedI18nNodes = null;
 
-async function setAppLocale(locale) {
+async function setAppLocale(locale, refreshView = true) {
     activeLocale = locale in LOCALE_NAMES ? locale : 'en';
 
     if (!translationsCache[activeLocale]) {
@@ -52,6 +93,7 @@ async function setAppLocale(locale) {
 
     translations = translationsCache[activeLocale];
     document.documentElement.lang = activeLocale;
+    document.documentElement.dir = RTL_LOCALES.has(activeLocale) ? 'rtl' : 'ltr';
     localStorage.setItem('nm_locale', activeLocale);
     if (!cachedI18nNodes) cachedI18nNodes = document.querySelectorAll('[data-i18n]');
 
@@ -65,10 +107,11 @@ async function setAppLocale(locale) {
     });
 
     renderLanguagePicker();
+    if (typeof renderThemePicker === 'function') renderThemePicker();
     const activeViewId = document.querySelector('.view-content.active')?.id;
 
     for (const id in viewLoadState) viewLoadState[id] = id === activeViewId;
-    if (activeViewId && activeViewId !== 'view-options') refreshCurrentView();
+    if (refreshView && activeViewId && activeViewId !== 'view-options') refreshCurrentView();
 }
 
 function renderLanguagePicker() {
@@ -94,7 +137,10 @@ function renderLanguagePicker() {
 
     if (!wrapper.dataset.listenerAttached) {
         document.getElementById('lang-select-trigger').onclick = (e) => { 
-            e.stopPropagation(); 
+            e.stopPropagation();
+            document.querySelectorAll('.custom-select-wrapper.open').forEach(w => {
+                if (w !== wrapper) w.classList.remove('open');
+            });
             wrapper.classList.toggle('open'); 
         };
         document.addEventListener('click', () => wrapper.classList.remove('open'));
@@ -106,31 +152,14 @@ function renderLanguagePicker() {
 const MOD_DIR = "/data/adb/modules";
 const NM_DATA = "/data/adb/nomount";
 const NM_BIN = "/data/adb/modules/nomount/bin/nm";
+const RULE_PATHS = `${MOD_DIR}/nomount/rule-paths.sh`;
+const FILES = { verbose: `${NM_DATA}/.verbose`, disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list.json`, theme: `${NM_DATA}/theme.json`, selftestLog: `${NM_DATA}/selftest.log` };
 const SELFTEST_BIN = "/data/adb/modules/nomount/bin/nomount-selftest";
-const FILES = { verbose: `${NM_DATA}/.verbose`, disable: `${NM_DATA}/disable`, exclusions: `${NM_DATA}/.exclusion_list`, selftestLog: `${NM_DATA}/selftest.log` };
 const SELFTEST_POLL_MS = 350;
 const SELFTEST_TIMEOUT_MS = 180000;
 const APP_ICON_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzgwODA4MCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIvPjwvc3ZnPg==";
 const viewLoadState = { 'view-home': false, 'view-modules': false, 'view-exclusions': false, 'view-options': false };
-let selftestRun = null;
 
-const normalizeUidList = uids => [...new Set(uids.map(value => {
-    const uid = String(value ?? '').trim();
-    if (!/^\d+$/.test(uid)) return null;
-    const numericUid = Number(uid);
-    return Number.isSafeInteger(numericUid) && numericUid <= 0xffffffff ? String(numericUid) : null;
-}).filter(Boolean))];
-const parseUidList = text => normalizeUidList(String(text ?? '').split(/[\s,]+/));
-const serializeUidList = uids => {
-    const safe = normalizeUidList(uids);
-    return safe.join('\n');
-};
-const buildWriteUidListCmd = uids => {
-    const safe = normalizeUidList(uids);
-    const tempFile = `${FILES.exclusions}.tmp`;
-    const write = safe.length ? `printf '%s\\n' ${safe.join(' ')}` : ':';
-    return `mkdir -p ${NM_DATA} && { ${write} > ${tempFile} && mv -f ${tempFile} ${FILES.exclusions}; }`;
-};
 const renderTextState = (el, cls, text) => { el.className = cls; el.textContent = text; };
 const renderEmptyState = (el, face, text) => el.innerHTML = `<div class="empty-list-placeholder empty-state"><div class="empty-face">${face}</div><div class="empty-text">${text}</div></div>`;
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -148,6 +177,7 @@ const ICON_PATHS = {
     extension: 'M352-120H200q-33 0-56.5-23.5T120-200v-152q48 0 84-30.5t36-77.5q0-47-36-77.5T120-568v-152q0-33 23.5-56.5T200-800h160q0-42 29-71t71-29q42 0 71 29t29 71h160q33 0 56.5 23.5T800-720v160q42 0 71 29t29 71q0 42-29 71t-71 29v160q0 33-23.5 56.5T720-120H568q0-50-31.5-85T460-240q-45 0-76.5 35T352-120Zm-152-80h85q24-66 77-93t98-27q45 0 98 27t77 93h85v-240h80q8 0 14-6t6-14q0-8-6-14t-14-6h-80v-240H480v-80q0-8-6-14t-14-6q-8 0-14 6t-6 14v80H200v88q54 20 87 67t33 105q0 57-33 104t-87 68v88Zm260-260Z',
     filter_list: 'M440-240q-17 0-28.5-11.5T400-280q0-17 11.5-28.5T440-320h80q17 0 28.5 11.5T560-280q0 17-11.5 28.5T520-240h-80ZM280-440q-17 0-28.5-11.5T240-480q0-17 11.5-28.5T280-520h400q17 0 28.5 11.5T720-480q0 17-11.5 28.5T680-440H280ZM160-640q-17 0-28.5-11.5T120-680q0-17 11.5-28.5T160-720h640q17 0 28.5 11.5T840-680q0 17-11.5 28.5T800-640H160Z',
     home: 'M240-200h120v-200q0-17 11.5-28.5T400-440h160q17 0 28.5 11.5T600-400v200h120v-360L480-740 240-560v360Zm-80 0v-360q0-19 8.5-36t23.5-28l240-180q21-16 48-16t48 16l240 180q15 11 23.5 28t8.5 36v360q0 33-23.5 56.5T720-120H560q-17 0-28.5-11.5T520-160v-200h-80v200q0 17-11.5 28.5T400-120H240q-33 0-56.5-23.5T160-200Zm320-270Z',
+    link_off: 'm770-302-60-62q40-11 65-42.5t25-73.5q0-50-35-85t-85-35H520v-80h160q83 0 141.5 58.5T880-480q0 57-29.5 105T770-302ZM634-440l-80-80h86v80h-6ZM792-56 56-792l56-56 736 736-56 56ZM440-280H280q-83 0-141.5-58.5T80-480q0-69 42-123t108-71l74 74h-24q-50 0-85 35t-35 85q0 50 35 85t85 35h160v80ZM320-440v-80h65l79 80H320Z',
     memory: 'M360-400v-160q0-17 11.5-28.5T400-600h160q17 0 28.5 11.5T600-560v160q0 17-11.5 28.5T560-360H400q-17 0-28.5-11.5T360-400Zm80-40h80v-80h-80v80Zm-80 280v-40h-80q-33 0-56.5-23.5T200-280v-80h-40q-17 0-28.5-11.5T120-400q0-17 11.5-28.5T160-440h40v-80h-40q-17 0-28.5-11.5T120-560q0-17 11.5-28.5T160-600h40v-80q0-33 23.5-56.5T280-760h80v-40q0-17 11.5-28.5T400-840q17 0 28.5 11.5T440-800v40h80v-40q0-17 11.5-28.5T560-840q17 0 28.5 11.5T600-800v40h80q33 0 56.5 23.5T760-680v80h40q17 0 28.5 11.5T840-560q0 17-11.5 28.5T800-520h-40v80h40q17 0 28.5 11.5T840-400q0 17-11.5 28.5T800-360h-40v80q0 33-23.5 56.5T680-200h-80v40q0 17-11.5 28.5T560-120q-17 0-28.5-11.5T520-160v-40h-80v40q0 17-11.5 28.5T400-120q-17 0-28.5-11.5T360-160Zm320-120v-400H280v400h400ZM480-480Z',
     refresh: 'M480-160q-134 0-227-93t-93-227q0-134 93-227t227-93q69 0 132 28.5T720-690v-70q0-17 11.5-28.5T760-800q17 0 28.5 11.5T800-760v200q0 17-11.5 28.5T760-520H560q-17 0-28.5-11.5T520-560q0-17 11.5-28.5T560-600h128q-32-56-87.5-88T480-720q-100 0-170 70t-70 170q0 100 70 170t170 70q68 0 124.5-34.5T692-367q8-14 22.5-19.5t29.5-.5q16 5 23 21t-1 30q-41 80-117 128t-169 48Z',
     search: 'M380-320q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l224 224q11 11 11 28t-11 28q-11 11-28 11t-28-11L532-372q-30 24-69 38t-83 14Zm0-80q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z',
@@ -155,6 +185,8 @@ const ICON_PATHS = {
     settings_suggest: 'm697-696-56-26q-12-5-12-18t12-18l56-26 26-56q5-12 18-12t18 12l26 56 56 26q12 5 12 18t-12 18l-56 26-26 56q-5 12-18 12t-18-12l-26-56Zm92 308-49-23q-6-3-6-9t6-9l49-23 23-49q3-6 9-6t9 6l23 49 49 23q6 3 6 9t-6 9l-49 23-23 49q-3 6-9 6t-9-6l-23-49ZM336-80q-15 0-26-10t-13-25l-8-59q-7-3-15-8t-13-10l-55 24q-14 6-28.5 1.5T155-185L91-297q-8-14-4.5-28.5T102-349l47-35v-32l-47-35q-12-9-15.5-23.5T91-503l64-112q8-14 22.5-18.5T206-632l55 24q5-5 13-10t15-8l8-59q2-15 13-25t26-10h130q15 0 26 10t13 25l8 59q7 3 15 8t13 10l55-24q14-6 28.5-1.5T647-615l64 112q8 14 4.5 28.5T700-451l-47 35v32l47 35q12 9 15.5 23.5T711-297l-64 112q-8 14-22.5 18.5T596-168l-55-24q-5 5-13 10t-15 8l-8 59q-2 15-13 25t-26 10H336Zm150-235q35-35 35-85t-35-85q-35-35-85-35t-85 35q-35 35-35 85t35 85q35 35 85 35t85-35ZM371-160h60l8-72q29-8 49.5-20.5T529-286l66 30 28-50-58-44q8-23 8-50t-8-50l58-44-28-50-66 30q-20-21-40.5-33.5T439-568l-8-72h-60l-8 72q-29 8-49.5 20.5T273-514l-66-30-28 50 58 44q-8 23-8.5 50t8.5 50l-58 44 28 50 66-30q20 21 40.5 33.5T363-232l8 72Zm30-240Z',
     shield: 'M467-85q-6-1-12-3-135-45-215-166.5T160-516v-189q0-25 14.5-45t37.5-29l240-90q14-5 28-5t28 5l240 90q23 9 37.5 29t14.5 45v189q0 140-80 261.5T505-88q-6 2-12 3t-13 1q-7 0-13-1Zm13-79q104-33 172-132t68-220v-189l-240-90-240 90v189q0 121 68 220t172 132Zm0-316Z',
     smartphone: 'M680-920H280c-44 0-80 36-80 80v720c0 44 36 80 80 80h400c44 0 80-36 80-80v-720c0-44-36-80-80-80Zm0 720H280v-600h400v600Zm-120 80h-160v-40h160v40Z',
+    edit: 'M200-200h57l391-391-57-57-391 391v57Zm-80 80v-170l528-527q12-11 26.5-17t30.5-6q16 0 31 6t26 18l55 56q12 11 17.5 26t5.5 30q0 16-5.5 30.5T817-647L290-120H120Zm640-584-56-56 56 56Zm-141 85-28-29 57 57-29-28Z',
+    check: 'M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z'
 };
 
 const FILLED_ICON_PATHS = {
@@ -194,21 +226,271 @@ function applyIcons() {
     });
 }
 
-let cachedMetaTheme = null;
-function syncSystemBarTheme() {
-    if (!cachedMetaTheme) cachedMetaTheme = document.querySelector('meta[name="theme-color"]');
-    if (!cachedMetaTheme) return;
+const THEME_NAMES = { system: 'System', light: 'Light', dark: 'Dark', amoled: 'AMOLED' };
+function renderThemePicker() {
+    const wrapper = document.getElementById('theme-select-wrapper');
+    const valueDisplay = document.getElementById('theme-select-value');
+    const menu = document.getElementById('theme-select-menu');
+    if (!wrapper || !valueDisplay || !menu) return;
 
-    const cs = getComputedStyle(document.documentElement);
-    const surfaceColor = cs.getPropertyValue('--md-sys-color-background').trim() ||
-                         cs.getPropertyValue('--md-sys-color-surface').trim();
-    if (surfaceColor) cachedMetaTheme.setAttribute('content', surfaceColor);
+    menu.replaceChildren();
+    for (const t in THEME_NAMES) {
+        const optionEl = document.createElement('div');
+        optionEl.className = `custom-select-option ${t === activeTheme ? 'selected' : ''}`;
+        const translatedName = translations[`theme_${t}`] || THEME_NAMES[t];
+        optionEl.textContent = translatedName;
+        if (t === activeTheme) valueDisplay.textContent = translatedName;
+
+        optionEl.onclick = (e) => {
+            e.stopPropagation();
+            wrapper.classList.remove('open');
+            if (t !== activeTheme) {
+                activeTheme = t;
+                localStorage.setItem('nm_theme', t);
+                applyAppearance();
+                renderThemePicker();
+                if (typeof syncThemeToDisk === 'function') syncThemeToDisk();
+            }
+        };
+        menu.appendChild(optionEl);
+    }
+
+    if (!wrapper.dataset.listenerAttached) {
+        document.getElementById('theme-select-trigger').onclick = (e) => { 
+            e.stopPropagation(); 
+            document.querySelectorAll('.custom-select-wrapper.open').forEach(w => {
+                if (w !== wrapper) w.classList.remove('open');
+            });
+            wrapper.classList.toggle('open'); 
+        };
+        document.addEventListener('click', () => wrapper.classList.remove('open'));
+        wrapper.dataset.listenerAttached = 'true';
+    }
+}
+
+let activeTheme = localStorage.getItem('nm_theme') || 'system';
+let isMaterial = localStorage.getItem('nm_material') !== 'false';
+let customColor = localStorage.getItem('nm_custom_color') || '#6750a4';
+
+function hexToHSL(hex) {
+    let r = parseInt(hex.slice(1, 3), 16) / 255;
+    let g = parseInt(hex.slice(3, 5), 16) / 255;
+    let b = parseInt(hex.slice(5, 7), 16) / 255;
+    let max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h, s, l = (max + min) / 2;
+    if (max === min) {
+        h = s = 0;
+    } else {
+        let d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        switch (max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        }
+        h /= 6;
+    }
+    return { h: Math.round(h * 360), s: Math.round(s * 100), l: Math.round(l * 100) };
+}
+
+const _PALETTE_ROLES = {
+    light: {
+        primary:                ['primary', 40, 0.85],
+        onPrimary:              ['primary', 90, 0.40],
+        primaryContainer:       ['primary', 90, 0.55],
+        onPrimaryContainer:     ['primary', 10, 0.75],
+        secondaryContainer:     ['secondary', 35, 0.50],
+        onSecondaryContainer:   ['secondary', 90, 0.45],
+        surface:                ['neutral', 98, 0.40],
+        background:             ['neutral', 92, 0.80],
+        surfaceContainer:       ['neutral', 88, 0.40],
+        surfaceContainerHigh:   ['neutral', 90, 0.50],
+        surfaceContainerHighest:['neutral', 94, 0.60],
+        onSurface:              ['neutral', 10, 0.80],
+        onSurfaceVariant:       ['neutralVariant', 30, 0.16],
+        outline:                ['neutralVariant', 50, 0.20],
+        error:                  ['error', 40, 0.85],
+        onError:                ['error', 100, 0.00],
+        errorContainer:         ['error', 90, 0.55],
+        onErrorContainer:       ['error', 10, 0.75],
+    },
+    dark: {
+        primary:                ['primary', 80, 0.55],
+        onPrimary:              ['primary', 20, 0.65],
+        primaryContainer:       ['primary', 30, 0.65],
+        onPrimaryContainer:     ['primary', 80, 0.45],
+
+        secondaryContainer:     ['secondary', 24, 0.50],
+        onSecondaryContainer:   ['secondary', 80, 0.30],
+
+        surface:                ['neutral', 10, 0.60],
+        background:             ['neutral', 6, 0.90],
+        surfaceContainer:       ['neutral', 12, 0.60],
+        surfaceContainerHigh:   ['neutral', 17, 0.60],
+        surfaceContainerHighest:['neutral', 22, 0.60],
+        onSurface:              ['neutral', 80, 0.06],
+        onSurfaceVariant:       ['neutralVariant', 80, 0.16],
+        outline:                ['neutralVariant', 60, 0.20],
+
+        error:                  ['error', 75, 0.95],
+        onError:                ['error', 20, 0.65],
+        errorContainer:         ['error', 50, 0.95],
+        onErrorContainer:       ['error', 60, 0.45],
+    },
+};
+
+_PALETTE_ROLES.amoled = Object.assign({}, _PALETTE_ROLES.dark, {
+    surface:                ['neutral', 4, 0.02],
+    background:             ['neutral', 4, 0.02],
+    surfaceContainer:       ['neutral', 8, 0.08],
+    surfaceContainerHigh:   ['neutral', 12, 0.12],
+    surfaceContainerHighest:['neutral', 16, 0.16],
+});
+
+const _PALETTE_HUES = {
+    primary:        0,
+    secondary:     -4,
+    neutral:        8,
+    neutralVariant: 8,
+    error:          4,
+};
+
+const hslToHex = (h, s, l) => {
+    l /= 100;
+    const a = s * Math.min(l, 1 - l) / 100;
+    const f = n => {
+        const k = (n + h / 30) % 12;
+        const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+        return Math.round(255 * color).toString(16).padStart(2, '0');
+    };
+    return `#${f(0)}${f(8)}${f(4)}`;
+};
+
+function _tone(h, s, tone) {
+    const t = tone / 100;
+    const bell = Math.pow(Math.sin(Math.PI * t), 0.9);
+    const sat = Math.min(1, s * bell);
+    return hslToHex(h * 360, sat * 100, tone);
+}
+
+function computePalette(seedHex, scheme) {
+    const { h: seedH, s: seedS } = hexToHSL(seedHex);
+    const seedHue = seedH / 360;
+    const seedSat = seedS / 100;
+    const roles = _PALETTE_ROLES[scheme] || _PALETTE_ROLES.light;
+
+    const out = {};
+    for (const [role, [palette, tone, chroma]] of Object.entries(roles)) {
+        const h = (palette === 'error') ? _PALETTE_HUES.error / 360 : (seedHue + _PALETTE_HUES[palette] / 360 + 1) % 1;
+        const s = (palette === 'error') ? chroma : seedSat * chroma;
+        out['--md-sys-color-' + role.replace(/[A-Z]/g, c => '-' + c.toLowerCase())] =
+            _tone(h, s, tone);
+    }
+    return out;
+}
+
+let _nmSeed = null, _nmMqDark = null;
+function getSeedColor() {
+    if (!isMaterial) return customColor;
+    if (_nmSeed) return _nmSeed;
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim();
+    _nmSeed = /^#[0-9a-f]{6}$/i.test(v) ? v : '#6750a4';
+    return _nmSeed;
+}
+
+function resolveScheme() {
+    if (activeTheme === 'light') return 'light';
+    if (activeTheme === 'dark')  return 'dark';
+    if (activeTheme === 'amoled') return 'amoled';
+    // 'system'
+    return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function applyAppearance() {
+    const root = document.documentElement;
+    root.setAttribute('data-theme', activeTheme);
+    root.setAttribute('data-material', isMaterial);
+
+    const scheme = resolveScheme();
+    root.setAttribute('data-scheme', scheme);
+
+    const palette = computePalette(getSeedColor(), scheme);
+    for (const [name, value] of Object.entries(palette))
+        root.style.setProperty(name, value);
+
+    if (!isMaterial)
+        root.style.setProperty('--nm-custom-color', customColor);
+    else
+        root.style.removeProperty('--nm-custom-color');
+
+    if (!_nmMqDark) {
+        _nmMqDark = matchMedia('(prefers-color-scheme: dark)');
+        _nmMqDark.addEventListener('change', () => {
+            if (activeTheme === 'system') {
+                _nmSeed = null;
+                applyAppearance();
+            }
+        });
+    }
+}
+// Apply immediately to prevent flashes
+applyAppearance();
+
+let nmThemeDirty = false;
+async function syncThemeToDisk() {
+    nmThemeDirty = true;
+    const config = { theme: activeTheme, material: isMaterial, color: customColor };
+    const jsonStr = JSON.stringify(config);
+    const b64 = btoa(unescape(encodeURIComponent(jsonStr)));
+    await exec(`mkdir -p ${NM_DATA} && echo "${b64}" | base64 -d > ${FILES.theme}.tmp && mv -f ${FILES.theme}.tmp ${FILES.theme}`);
+}
+
+async function restoreThemeFromDisk() {
+    try {
+        const { stdout, errno } = await exec(`cat ${FILES.theme} 2>/dev/null`);
+        if (errno !== 0 || !stdout) return;
+
+        let config;
+        try { config = JSON.parse(stdout.trim()); } catch { return; }
+
+        if (nmThemeDirty) return;
+
+        const diskTheme = (config.theme && config.theme in THEME_NAMES) ? config.theme : activeTheme;
+        const diskMaterial = config.material !== undefined ? Boolean(config.material) : isMaterial;
+        const diskColor = (typeof config.color === 'string' && /^#[0-9a-f]{6}$/i.test(config.color)) ? config.color : customColor;
+
+        if (diskTheme === activeTheme && diskMaterial === isMaterial && diskColor === customColor) return;
+
+        activeTheme = diskTheme;
+        isMaterial = diskMaterial;
+        customColor = diskColor;
+        localStorage.setItem('nm_theme', activeTheme);
+        localStorage.setItem('nm_material', isMaterial);
+        localStorage.setItem('nm_custom_color', customColor);
+
+        applyAppearance();
+        if (document.getElementById('theme-select-menu')) renderThemePicker();
+
+        const swMat = document.querySelector('#setting-material input');
+        const customColCard = document.getElementById('custom-color-card');
+        const colorIndicator = document.getElementById('custom-color-indicator');
+        const matCard = swMat?.closest('.segment-card');
+
+        if (swMat) swMat.checked = isMaterial;
+        if (customColCard) customColCard.style.display = isMaterial ? 'none' : '';
+        if (colorIndicator) colorIndicator.style.backgroundColor = customColor;
+        if (matCard) {
+            matCard.style.borderEndStartRadius = isMaterial ? 'var(--nm-segment-outer-corner)' : '';
+            matCard.style.borderEndEndRadius = isMaterial ? 'var(--nm-segment-outer-corner)' : '';
+        }
+    } catch (e) {}
 }
 
 const homeUI = {};
 function getHomeElements() {
     if (!homeUI.kernel) {
         homeUI.stats = document.getElementById('injection-stats');
+        homeUI.moduleVersion = document.getElementById('module-version');
         homeUI.kernel = document.getElementById('kernel-version');
         homeUI.device = document.getElementById('device-model');
         homeUI.android = document.getElementById('android-ver');
@@ -216,6 +498,7 @@ function getHomeElements() {
         homeUI.statusLabel = document.getElementById('status-indicator');
         homeUI.statusCard = document.querySelector('.home-status-card');
         homeUI.statusIcon = document.getElementById('status-icon');
+        homeUI.modeBadge = document.getElementById('nm-mode-badge');
     }
     return homeUI;
 }
@@ -224,6 +507,83 @@ const UI = {};
 let currentActiveViewId = 'view-home';
 let currentActiveViewTitle = '';
 
+let nmHistory = { level: 0, dialog: null, depth: 0 };
+history.replaceState(nmHistory, '');
+
+const nmDialogClosers = { presets: null, advanced: null };
+function nmPush(state) {
+    nmHistory = { level: state.level, dialog: state.dialog ?? null, depth: nmHistory.depth + 1 };
+    history.pushState(nmHistory, '');
+}
+function nmReplace(state) {
+    nmHistory = { level: state.level, dialog: state.dialog ?? null, depth: nmHistory.depth };
+    history.replaceState(nmHistory, '');
+}
+
+window.addEventListener('popstate', (e) => {
+    const prev = nmHistory;
+    const next = e.state || { level: 0, dialog: null, depth: 0 };
+
+    if (prev.dialog === 'advancedColor' && next.dialog !== 'advancedColor')
+        nmDialogClosers.advanced?.();
+    if (prev.dialog === 'colorPresets' && next.dialog !== 'colorPresets')
+        nmDialogClosers.presets?.();
+    if (prev.level === 3 && next.level < 3)
+        closeUidModalFromHistory();
+    if (prev.level === 2 && next.level < 2) {
+        closeAppSelector(true);
+        exitMultiSelectMode();
+    }
+    if (prev.level >= 1 && next.level === 0)
+        switchToTab('view-home', false);
+
+    nmHistory = next;
+});
+
+function switchToTab(target, pushToHistory = true) {
+    if (currentActiveViewId === target && document.getElementById(target)?.classList.contains('active')) return;
+
+    const navItems = document.querySelectorAll('.nav-item');
+    const views = document.querySelectorAll('.view-content');
+    const fab = document.getElementById('fab-container');
+
+    navItems.forEach(nav => {
+        nav.classList.remove('active');
+        const i = nav.querySelector('md-icon');
+        if (i) setIcon(i, (i.dataset.icon || i.textContent.trim()), nav.dataset.target === target ? 'filled' : 'outline');
+        if (nav.dataset.target === target) nav.classList.add('active');
+    });
+
+    views.forEach(v => v.classList.remove('active'));
+    const targetView = document.getElementById(target);
+    if (targetView) targetView.classList.add('active');
+
+    currentActiveViewId = target;
+    currentActiveViewTitle = targetView.querySelector('.header-title')?.textContent?.trim() || '';
+
+    updateTopAppBar();
+    if (fab) fab.classList.toggle('visible', target === 'view-exclusions');
+
+    if (pushToHistory) {
+        if (target === 'view-home') {
+            if (nmHistory.depth > 0) history.go(-nmHistory.depth);
+        } else {
+            if (nmHistory.level === 0) nmPush({ level: 1 });
+            else nmReplace({ level: 1 });
+        }
+    }
+
+    setTimeout(() => {
+        if (!viewLoadState[target]) {
+            viewLoadState[target] = true;
+            if (target === 'view-home') loadHome();
+            else if (target === 'view-modules') loadModules();
+            else if (target === 'view-exclusions') loadExclusions();
+            else if (target === 'view-options') loadOptions();
+        }
+    }, 0);
+}
+
 function updateTopAppBar() {
     if (!UI.c) {
         UI.c = document.querySelector('.page-container');
@@ -231,7 +591,7 @@ function updateTopAppBar() {
         UI.title = document.getElementById('top-app-bar-title');
     }
 
-    if (!['view-modules', 'view-exclusions'].includes(currentActiveViewId)) {
+    if (!['view-modules', 'view-exclusions', 'view-options'].includes(currentActiveViewId)) {
         if (UI.title.textContent !== '') UI.title.textContent = '';
         UI.bar.style.setProperty('--top-app-bar-opacity', '0');
         UI.bar.style.setProperty('--top-app-title-opacity', '0');
@@ -254,45 +614,13 @@ function updateTopAppBar() {
 
 function initNavigation() {
     const navItems = document.querySelectorAll('.nav-item');
-    const views = document.querySelectorAll('.view-content');
-    const fab = document.getElementById('fab-container');
-
     navItems.forEach(item => {
         const iconEl = item.querySelector('md-icon');
         if (iconEl) {
             const iconName = iconEl.dataset.icon || iconEl.textContent.trim();
             setIcon(iconEl, iconName, item.classList.contains('active') ? 'filled' : 'outline');
         }
-
-        item.addEventListener('click', () => {
-            navItems.forEach(nav => {
-                nav.classList.remove('active');
-                const i = nav.querySelector('md-icon');
-                if (i) setIcon(i, (i.dataset.icon || i.textContent.trim()), nav === item ? 'filled' : 'outline');
-            });
-            item.classList.add('active');
-            const target = item.dataset.target;
-            
-            views.forEach(v => v.classList.remove('active'));
-            const targetView = document.getElementById(target);
-            targetView.classList.add('active');
-            
-            currentActiveViewId = target;
-            currentActiveViewTitle = targetView.querySelector('.header-title')?.textContent?.trim() || '';
-            
-            updateTopAppBar();
-            fab.classList.toggle('visible', target === 'view-exclusions');
-
-            setTimeout(() => {
-                if (!viewLoadState[target]) {
-                    viewLoadState[target] = true;
-                    if (target === 'view-home') loadHome();
-                    else if (target === 'view-modules') loadModules();
-                    else if (target === 'view-exclusions') loadExclusions();
-                    else if (target === 'view-options') loadOptions();
-                }
-            }, 0);
-        });
+        item.addEventListener('click', () => switchToTab(item.dataset.target, true));
     });
 }
 
@@ -306,13 +634,9 @@ async function loadHome() {
         getprop ro.build.version.release; echo "|||"
         getprop ro.build.version.sdk; echo "|||"
         grep "version=" ${MOD_DIR}/nomount/module.prop | cut -d= -f2; echo "|||"
-        ${NM_BIN} v; echo "|||"
-        NM_VER="$(${NM_BIN} v 2>/dev/null | tr -d '\\r\\n')"
-        if [ -n "$NM_VER" ] && [ "$NM_VER" -ge 13 ] 2>/dev/null; then
-            ${NM_BIN} list json
-        else
-            echo "[]"
-        fi
+        ${NM_BIN} version; echo "|||"
+        ${NM_BIN} rule list --json; echo "|||"
+        if ${NM_BIN} version > /dev/null 2>&1; then lsmod | grep -q nomount && echo lkm || echo built-in; fi
     `;
 
     try {
@@ -340,11 +664,14 @@ async function loadHome() {
               mVer = raw[4] || unk,
               dVer = raw[5] || unk;
 
+        const nmMode = (parts[7] || '').toLowerCase();
         const homeData = {
             kernelVer: kVer, deviceModel: model,
             androidInfo: `Android ${aRel} (API ${aSdk})`,
-            versionFull: `${mVer} (${dVer})`,
-            active: dVer !== unk
+            driverVersion: `${dVer}`,
+            moduleVersion: `${mVer}`,
+            active: dVer !== unk,
+            nmMode
         };
 
         requestAnimationFrame(() => {
@@ -359,7 +686,12 @@ function applyHomeData(data, statsText) {
     if (el.kernel) el.kernel.textContent = data.kernelVer || translate('unknown_value');
     if (el.device) el.device.textContent = data.deviceModel || translate('unknown_value');
     if (el.android) el.android.textContent = data.androidInfo || translate('unknown_value');
-    if (el.statusLabel) el.statusLabel.textContent = data.versionFull || translate('unknown_value');
+    if (el.moduleVersion) el.moduleVersion.textContent = translate('status_version', {
+        version: (data.moduleVersion || translate('unknown_value')).replace(/^v(?=\d)/i, '')
+    });
+    if (el.statusLabel) el.statusLabel.textContent = translate('status_version', {
+        version: (data.driverVersion || translate('unknown_value')).replace(/^v(?=\d)/i, '')
+    });
     if (statsText && el.stats) el.stats.textContent = statsText;
 
     if (el.statusTitle) el.statusTitle.textContent = translate(data.active ? 'status_active' : 'status_inactive');
@@ -370,10 +702,15 @@ function applyHomeData(data, statsText) {
         el.statusIcon.classList.toggle('inactive', !data.active);
         setIcon(el.statusIcon, data.active ? 'check_circle' : 'error', 'outline');
     }
+
+    if (el.modeBadge) {
+        el.modeBadge.textContent = data.nmMode === 'lkm' ? translate('mode_lkm') : data.nmMode === 'built-in' ? translate('mode_builtin') : '';
+    }
 }
 
 // Modules
 let currentRenderId = 0;
+const TARGET_PARTITIONS = "system system_ext vendor odm product apex oem optics prism mi_ext my_bigball my_carrier my_company my_engineering my_heytap my_manifest my_preload my_product my_region my_reserve my_stock";
 async function loadModules() {
     const listContainer = document.getElementById('modules-list');
     if (!listContainer) return;
@@ -381,20 +718,12 @@ async function loadModules() {
 
     try {
         const script = `
-            NM_VER="$(${NM_BIN} v 2>/dev/null | tr -d '\\r\\n')"
-            if [ -n "$NM_VER" ] && [ "$NM_VER" -ge 13 ] 2>/dev/null; then
-                ${NM_BIN} list json
-            else
-                echo "[]"
-            fi
-            echo "|||"
+            ${NM_BIN} rule list --json; echo "|||"
             cd ${MOD_DIR}
             for mod in *; do
                 [ ! -d "$mod" ] || [ "$mod" = "nomount" ] || [ ! -f "$mod/module.prop" ] && continue
                 has_injectable=0
-                for p in system vendor product system_ext oem odm my_* tran_*; do
-                    if [ -d "$mod/$p" ]; then has_injectable=1; break; fi
-                done
+                for p in ${TARGET_PARTITIONS}; do [ -d "$mod/$p" ] && { [ -d "/$p" ] || [ -d "/system/$p" ]; } && has_injectable=1 && break; done
                 [ $has_injectable -eq 0 ] && continue
                 echo "$mod|$(grep "^name=" "$mod/module.prop" | head -n1 | cut -d= -f2-)|$([ -f "$mod/disable" ] && echo true || echo false)|$([ -f "$mod/skip_mount" ] && echo true || echo false)"
             done
@@ -419,14 +748,25 @@ async function loadModules() {
             const hasDisable = disableStr === 'true', hasSkipMount = skipStr === 'true';
             const fileCount = ruleCountByMod[modId] || 0;
             const isLoaded = fileCount > 0;
-            const statusKey = isLoaded ? (hasDisable ? 'status_loaded' : 'status_active') : (hasDisable ? 'status_disabled' : (hasSkipMount ? 'status_skipped' : 'status_inactive'));
+            const statusKey = isLoaded ? ((hasDisable || hasSkipMount) ? 'status_loaded' : 'status_active') : (hasDisable ? 'status_disabled' : (hasSkipMount ? 'status_skipped' : 'status_inactive'));
             return `
                 <div class="card module-card" data-module-id="${modId}">
                     <div class="module-header">
                         <div class="module-info">
                             <h3>${realName || modId}</h3>
-                            <p>${translate('status_label')}: ${translate(statusKey)}</p>
-                            <div class="file-count"><span>${translate('modules_injected_files', { count: fileCount })}</span></div>
+                            <div class="module-chips">
+                                <span class="status-chip md-chip status-${statusKey.replace('status_', '')}">
+                                    ${translate(statusKey)}
+                                </span>
+                                <span class="files-chip md-chip" style="${fileCount > 0 ? '' : 'display: none;'}">
+                                    <md-icon data-icon="syringe">
+                                        <svg viewBox="0 0 48 48" aria-hidden="true" style="width: 1.2em; height: 1.2em; fill: currentColor; transform: scaleX(-1);">
+                                            <path d="M45.4,10.3,37.7,2.6a2.1,2.1,0,0,0-2.9,0,2.1,2.1,0,0,0,0,2.8l2.5,2.5-3.4,3.4L28.5,5.8h0a2,2,0,1,0-2.8,2.9L9.9,24.4a6.3,6.3,0,0,0-1.7,5.2l1.1,6.3L4.6,40.6a1.9,1.9,0,0,0,0,2.8,1.9,1.9,0,0,0,2.8,0l4.7-4.7,6.3,1.1a6,6,0,0,0,5.2-1.7L39.4,22.3a2,2,0,1,0,2.9-2.7l-5.6-5.5,3.4-3.4,2.5,2.5a2,2,0,0,0,1.4.6A2.1,2.1,0,0,0,45.4,10.3Zm-24.6,25a2.3,2.3,0,0,1-1.8.5l-5.8-1-1-5.8a2.3,2.3,0,0,1,.5-1.8l2.6-2.5,3.2,3.2a2.1,2.1,0,0,0,2.9,0,1.9,1.9,0,0,0,0-2.8l-3.3-3.3,3.4-3.3,3.3,3.2a2,2,0,0,0,2.8-2.8l-3.3-3.3,4.2-4.1,8,8Z"/>
+                                        </svg>
+                                    </md-icon>
+                                    <span class="files-count-text">${fileCount > 0 ? translate('modules_injected_files', { count: fileCount }) : ''}</span>
+                                </span>
+                            </div>
                         </div>
                         <label class="custom-switch" id="switch-${modId}">
                             <input type="checkbox" class="switch-input" aria-label="Toggle module" ${!hasDisable ? 'checked' : ''}>
@@ -437,6 +777,9 @@ async function loadModules() {
                     </div>
                     <div class="module-divider"></div>
                     <div class="module-extension">
+                        <button class="btn-skip-action ${hasSkipMount ? 'unskip' : ''}" id="btn-skip-${modId}">
+                            <span>${translate(hasSkipMount ? 'modules_unskip' : 'modules_skip')}</span>
+                        </button>
                         <button class="btn-hot-action ${isLoaded ? 'unload' : ''}" id="btn-hot-${modId}">
                             <span>${translate(isLoaded ? 'modules_hot_unload' : 'modules_hot_load')}</span>
                         </button>
@@ -455,82 +798,49 @@ async function loadModules() {
 
 async function loadModule(modId) {
     const modPath = `${MOD_DIR}/${modId}`;
-
     const script = `
         cd "${modPath}" || exit 0
-        find -L system vendor product system_ext odm oem \\( -type c -o -name ".replace" \\) -exec sh -c '
-            mod="$1"; shift
-            for f do
-                if [ "\${f##*/}" = ".replace" ]; then
-                    target="\${f%/.replace}"
-                else
-                    target="$f"
-                fi
+        valid_dirs=""
+        for p in ${TARGET_PARTITIONS}; do [ -d "$p" ] && { [ -d "/$p" ] || [ -d "/system/$p" ]; } && valid_dirs="$valid_dirs $p"; done
+        [ -z "$valid_dirs" ] && exit 0
+        find -L $valid_dirs \\( -type d -o -type c -o -name ".replace" \\) -exec sh "${RULE_PATHS}" path "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 200 ${NM_BIN} rule add --whiteout
 
-                printf "/%s\\0" "$target"
-                case "$target" in
-                    vendor/*|product/*|system_ext/*|odm/*|oem/*)
-                        [ ! -e "$mod/system/$f" ] && [ ! -L "$mod/system/$f" ] && printf "/system/%s\\0" "$target" ;;
-                    system/vendor/*|system/product/*|system/system_ext/*|system/odm/*|system/oem/*)
-                        [ ! -e "$mod/\${f#system/}" ] && [ ! -L "$mod/\${f#system/}" ] && printf "/%s\\0" "\${target#system/}" ;;
-                esac
-            done
-        ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 500 ${NM_BIN} w
-        find -L system vendor product system_ext odm oem \\( -type f -o -type l \\) ! -name ".replace" -exec sh -c '
-            mod="$1"; shift
-            for f do
-                printf "/%s\\0%s/%s\\0" "$f" "$mod" "$f"
-
-                case "$f" in
-                    vendor/*|product/*|system_ext/*|odm/*|oem/*)
-                        [ ! -e "$mod/system/$f" ] && [ ! -L "$mod/system/$f" ] && printf "/system/%s\\0%s/%s\\0" "$f" "$mod" "$f" ;;
-                    system/vendor/*|system/product/*|system/system_ext/*|system/odm/*|system/oem/*)
-                        [ ! -e "$mod/\${f#system/}" ] && [ ! -L "$mod/\${f#system/}" ] && printf "/%s\\0%s/%s\\0" "\${f#system/}" "$mod" "$f" ;;
-                esac
-            done
-        ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 500 ${NM_BIN} add
+        find -L $valid_dirs  \\( -type f -o -type l \\) ! -name ".replace" -exec sh "${RULE_PATHS}" pair "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 200 ${NM_BIN} rule add
     `;
     try { await exec(script); } catch (e) { throw e; }
 }
 
 async function unloadModule(modId) {
-    try {
-        const rules = JSON.parse((await exec(`${NM_BIN} list json`)).stdout || "[]");
-        const targets = rules
-            .filter(rule => rule?.real?.startsWith(`${MOD_DIR}/${modId}/`))
-            .map(rule => rule.virtual);
-
-        const cmdChunks = [];
-        for (let i = 0; i < targets.length; i += 500) {
-            const chunk = targets.slice(i, i + 500).join('\n');
-            cmdChunks.push(`cat << 'EOF' | tr '\\n' '\\0' | xargs -0 -r -n 500 ${NM_BIN} del\n${chunk}\nEOF`);
-        }
-        if (cmdChunks.length) await exec(cmdChunks.join('\n'));
-
-        const modPath = `${MOD_DIR}/${modId}`;
-        await exec(`
-            cd "${modPath}" || exit 0
-            find -L system vendor product system_ext odm oem \\( -type c -o -name ".replace" \\) -exec sh -c '
-                mod="$1"; shift
-                for f do
-                    if [ "\${f##*/}" = ".replace" ]; then target="\${f%/.replace}"; else target="$f"; fi
-                    printf "/%s\\0" "$target"
-                    case "$target" in
-                        vendor/*|product/*|system_ext/*|odm/*|oem/*)
-                            [ ! -e "$mod/system/$f" ] && [ ! -L "$mod/system/$f" ] && printf "/system/%s\\0" "$target" ;;
-                        system/vendor/*|system/product/*|system/system_ext/*|system/odm/*|system/oem/*)
-                            [ ! -e "$mod/\${f#system/}" ] && [ ! -L "$mod/\${f#system/}" ] && printf "/%s\\0" "\${target#system/}" ;;
-                    esac
-                done
-            ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 500 ${NM_BIN} del || true
-        `);
-    } catch (e) { throw e; }
+    const modPath = `${MOD_DIR}/${modId}`;
+    const script = `
+        cd "${modPath}" || exit 0
+        valid_dirs=""
+        for p in ${TARGET_PARTITIONS}; do [ -d "$p" ] && { [ -d "/$p" ] || [ -d "/system/$p" ]; } && valid_dirs="$valid_dirs $p"; done
+        [ -z "$valid_dirs" ] && exit 0
+        find -L $valid_dirs \\( -type f -o -type l -o -type c -o -type d \\) -exec sh "${RULE_PATHS}" path "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 200 ${NM_BIN} rule del
+    `;
+    try { await exec(script); } catch (e) { throw e; }
 }
 
 // Apps & Exclusions
-let allAppsCache = [], showSystemApps = false,
-    appLoadingPromise = null, currentlyDisplayedApps = [],
-    appListRenderIndex = 0, listObserver = null, filterTimeout, exclusionsLoadId = 0;
+let allAppsCache = [], showSystemApps = false, appLoadingPromise = null, appListRenderIndex = 0,
+    currentlyDisplayedApps = [], listObserver = null, filterTimeout, exclusionsLoadId = 0,
+    isMultiSelectMode = false, selectedAppsMap = new Map();
+
+async function readExclusionsJson() {
+    try {
+        const { stdout } = await exec(`cat ${FILES.exclusions} 2>/dev/null || echo "[]"`);
+        const parsed = JSON.parse(stdout.trim());
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) { return []; }
+}
+
+async function writeExclusionsJson(dataArray) {
+    const jsonStr = JSON.stringify(dataArray);
+    const b64 = btoa(unescape(encodeURIComponent(jsonStr))); 
+    const cmd = `mkdir -p ${NM_DATA} && echo "${b64}" | base64 -d > ${FILES.exclusions}.tmp && mv -f ${FILES.exclusions}.tmp ${FILES.exclusions}`;
+    return await exec(cmd);
+}
 
 async function loadExclusions() {
     const listContainer = document.getElementById('exclusions-list');
@@ -538,26 +848,25 @@ async function loadExclusions() {
     const loadId = ++exclusionsLoadId;
 
     try {
-        const readResult = await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`);
-        if (readResult.errno !== 0) throw new Error(readResult.stderr || 'Failed to read exclusions');
+        // The hookless kernel has no command to enumerate the excluded UIDs, so
+        // the persistent store is the source of truth for this list.
+        const savedData = await readExclusionsJson();
+        const blockedUids = savedData
+            .map(app => String(app.uid))
+            .filter(uid => /^\d+$/.test(uid));
+        const appsMap = new Map(savedData.map(app => [String(app.uid), app]));
 
-        const blockedUids = parseUidList(readResult.stdout);
-        if (readResult.stdout !== serializeUidList(blockedUids)) {
-            const migrationResult = await exec(buildWriteUidListCmd(blockedUids));
-            if (migrationResult.errno !== 0) throw new Error(migrationResult.stderr || 'Failed to migrate exclusions');
-        }
-
-        if (blockedUids.length > 0) try { await ensureAppsCache(); } catch {}
-        const appsMap = new Map(allAppsCache.map(app => [app.uid, app]));
         const htmlArr = blockedUids.map(uid => {
             const app = appsMap.get(uid);
-            const label = app ? app.appLabel : `UID: ${uid}`;
-            const pkg = app ? app.packageName : 'System/Unknown';
+            const label = app ? app.label : `UID: ${uid}`;
+            const pkg = app ? app.pkg : 'System/Unknown';
+            const userId = Math.floor(Number(uid) / 100000);
+            const userBadge = userId !== 0 ? `<span class="system-chip">User ${userId}</span>` : '';
             return `
                 <div class="card setting-item" data-uid="${uid}" data-label="${label}">
                     <div class="exclusion-app">
                         <img src="ksu://icon/${pkg}" class="app-icon-img" onerror="this.src='${APP_ICON_FALLBACK}'" />
-                        <div class="setting-text"><h3>${label}</h3><p>${pkg}</p></div>
+                        <div class="setting-text"><h3>${label} ${userBadge}</h3><p>${pkg}</p></div>
                     </div>
                     <md-icon-button class="btn-delete" aria-label="Remove exclusion">
                         <md-icon data-icon="delete" data-icon-variant="outline" aria-hidden="true">
@@ -580,8 +889,43 @@ async function loadExclusions() {
     }
 }
 
+// uses pm to resolve app UID
+async function getRealUidEntries() {
+    // entries: packageName -> [{ uid, userId }, ...]
+    const entries = new Map();
+
+    const { stdout: usersOut } = await exec('pm list users 2>/dev/null');
+    let userIds = [...usersOut.matchAll(/UserInfo\{(\d+):/g)].map(m => m[1]);
+    if (userIds.length === 0) userIds = ['0'];
+
+    for (const userId of userIds) {
+        const { stdout } = await exec(`pm list packages -U --user ${userId} 2>/dev/null`);
+        for (const line of stdout.split('\n')) {
+            const m = line.match(/^package:(\S+)\s+uid:(\d+)/);
+            if (!m) continue;
+            const [, pkgName, uid] = m;
+            if (!entries.has(pkgName)) entries.set(pkgName, []);
+            entries.get(pkgName).push({ uid, userId });
+        }
+    }
+    return entries;
+}
+
 async function ensureAppsCache(force = false) {
     if (!force && allAppsCache.length > 0) return;
+
+    if (!force) {
+        try {
+            const cachedApps = localStorage.getItem('nm_apps_cache');
+            if (cachedApps) {
+                allAppsCache = JSON.parse(cachedApps);
+                return;
+            }
+        } catch (e) {
+            console.warn("Failed to load apps from LocalStorage, fetching fresh data...", e);
+        }
+    }
+
     if (appLoadingPromise) {
         await appLoadingPromise;
         if (!force || allAppsCache.length > 0) return;
@@ -615,12 +959,39 @@ async function ensureAppsCache(force = false) {
                 await delay(15); 
             }
 
-            allAppsCache = tempCache.map(app => ({
-                ...app, 
-                appLabel: app.appLabel || app.packageName, 
+            // uses pm to list package uid per user, keep ksu's label/isSystem
+            const uidEntries = await getRealUidEntries();
+            const seenPkg = new Set(); // package already seen / previously appeared
+            const expandedCache = [];
+            for (const app of tempCache) {
+                // ksu.listPackages("all") already lists a multi-user app more than once
+                // (with a wrong/duplicate uid), so we dedupe by name here since the
+                // real instance count comes from pm (uidEntries) below, not from ksu
+                if (seenPkg.has(app.packageName)) continue;
+                seenPkg.add(app.packageName);
+
+                const instances = uidEntries.get(app.packageName);
+                if (!instances || instances.length === 0) { expandedCache.push(app); continue; }
+                for (const { uid, userId } of instances) {
+                    expandedCache.push({ ...app, uid, userId, isClone: userId !== '0' });
+                }
+            }
+
+            allAppsCache = expandedCache.map(app => ({
                 uid: String(app.uid),
+                packageName: app.packageName,
+                appLabel: app.appLabel || app.packageName,
+                isSystem: Boolean(app.isSystem),
+                isClone: Boolean(app.isClone),
+                userId: app.userId,
                 _search: (app.appLabel || app.packageName).toLowerCase() + app.packageName.toLowerCase()
             })).sort((a, b) => a.appLabel < b.appLabel ? -1 : (a.appLabel > b.appLabel ? 1 : 0));
+
+            try {
+                localStorage.setItem('nm_apps_cache', JSON.stringify(allAppsCache));
+            } catch (e) {
+                console.warn("Failed to save apps cache to LocalStorage. Data might be too large.", e);
+            }
 
         } catch (e) {
             console.error("Error in ensureAppsCache:", e);
@@ -629,6 +1000,17 @@ async function ensureAppsCache(force = false) {
         }
     })();
     return appLoadingPromise;
+}
+
+function closeAppSelector(fromHistory = false) {
+    const modal = document.getElementById('app-selector-modal');
+    const content = modal?.querySelector('.modal-content');
+    modal?.classList.remove('active');
+    content?.classList.remove('viewport-locked');
+    content?.style.removeProperty('--app-selector-top');
+    content?.style.removeProperty('--app-selector-height');
+    if (listObserver) listObserver.disconnect();
+    if (!fromHistory && nmHistory.level >= 2) history.back();
 }
 
 function openAppSelector() {
@@ -640,15 +1022,21 @@ function openAppSelector() {
     const sysSwitch = switchWrapper ? (switchWrapper.tagName === 'INPUT' ? switchWrapper : switchWrapper.querySelector('input')) : null;
     if (!modal) return;
 
+    const content = modal.querySelector('.modal-content');
+    const viewportHeight = document.documentElement.clientHeight;
+    content.style.setProperty('--app-selector-top', `${Math.round(viewportHeight * 0.1)}px`);
+    content.style.setProperty('--app-selector-height', `${Math.round(viewportHeight * 0.9)}px`);
+    content.classList.add('viewport-locked');
     modal.classList.add('active');
+
+    if (nmHistory.level < 2) nmPush({ level: 2 });
     if (listObserver) listObserver.disconnect();
     document.getElementById('filter-menu').classList.remove('active'); 
     searchInput.value = '';
     if (sysSwitch) sysSwitch.checked = showSystemApps;
 
     document.getElementById('btn-close-modal').onclick = () => { 
-        modal.classList.remove('active'); 
-        if (listObserver) listObserver.disconnect(); 
+        closeAppSelector();
     };
 
     container.innerHTML = `<div class="loading-spinner">${translate('loading') || 'Loading apps...'}</div>`;
@@ -693,13 +1081,16 @@ function renderNextAppBatch() {
         return;
     }
 
-    const htmlStr = batch.map(app => `
-        <div class="app-item segment-card" data-uid="${app.uid}" data-label="${app.appLabel}">
+    const htmlStr = batch.map(app => {
+        const isSel = selectedAppsMap.has(app.uid) ? 'selected' : '';
+        return `
+        <div class="app-item segment-card ${isSel}" data-uid="${app.uid}" data-label="${app.appLabel}" data-pkg="${app.packageName}">
             <img src="ksu://icon/${app.packageName}" class="app-icon-img" loading="lazy" onerror="this.src='${APP_ICON_FALLBACK}'" />
             <div class="app-details"><div class="app-name">${app.appLabel}</div><div class="app-pkg">${app.packageName}</div></div>
-            <div class="app-meta"><div class="uid-label">UID: ${app.uid}</div>${app.isSystem ? '<span class="system-chip">SYS</span>' : ''}</div>
+            <div class="app-meta"><div class="uid-label">UID: ${app.uid}</div>${app.isSystem ? '<span class="system-chip">SYS</span>' : ''}${app.isClone ? `<span class="system-chip">User ${app.userId}</span>` : ''}</div>
         </div>
-    `).join('');
+        `;
+    }).join('');
 
     container.insertAdjacentHTML('beforeend', htmlStr);
     appListRenderIndex += batch.length;
@@ -707,49 +1098,50 @@ function renderNextAppBatch() {
     if (lastEl && listObserver) listObserver.observe(lastEl);
 }
 
-async function removeExclusion(uid, name) {
+async function removeExclusion(uid, name, domItem) {
     showToast(translate('unblocking_name', { name }));
     try {
-        const uidStr = normalizeUidList([uid])[0];
-        if (!uidStr) throw new Error('Invalid UID');
-
-        const readResult = await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`);
-        if (readResult.errno !== 0) throw new Error(readResult.stderr || 'Failed to read exclusions');
-
-        const remainingUids = parseUidList(readResult.stdout).filter(value => value !== uidStr);
-        const writeResult = await exec(buildWriteUidListCmd(remainingUids));
-        if (writeResult.errno !== 0) throw new Error(writeResult.stderr || 'Failed to update exclusions');
-
-        const unblockResult = await exec(`${NM_BIN} unblock ${uidStr}`);
+        const unblockResult = await exec(`${NM_BIN} uid del ${uid}`);
         if (unblockResult.errno !== 0) throw new Error(unblockResult.stderr || 'Failed to unblock UID');
-    } catch { showToast(translate('error_unblocking')); }
-    await loadExclusions();
+        const currentData = await readExclusionsJson();
+        const newData = currentData.filter(app => String(app.uid) !== String(uid));
+        await writeExclusionsJson(newData);
+        domItem.remove();
+        const listContainer = document.getElementById('exclusions-list');
+        if (listContainer.children.length === 0)
+            renderEmptyState(listContainer, '(._.)', translate('no_exclusions_yet'));
+    } catch {
+        showToast(translate('error_unblocking'));
+        domItem.style.opacity = '1';
+        domItem.style.pointerEvents = 'auto';
+    }
 }
 
-async function addExclusion(uid, name) {
-    const uidStr = normalizeUidList([uid])[0];
-    if (!uidStr) {
-        showToast(translate('error_blocking'));
-        return;
-    }
+async function addExclusion(uid, label, pkg) {
+    const uidStr = String(uid).trim();
+    if (!uidStr) return showToast(translate('error_blocking'));
 
     try {
-        const readResult = await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`);
-        if (readResult.errno !== 0) throw new Error(readResult.stderr || 'Failed to read exclusions');
-
-        const currentUids = parseUidList(readResult.stdout);
-        const alreadyBlocked = currentUids.includes(uidStr);
-        if (!alreadyBlocked) {
-            const writeResult = await exec(buildWriteUidListCmd([...currentUids, uidStr]));
-            if (writeResult.errno !== 0) throw new Error(writeResult.stderr || 'Failed to update exclusions');
+        const currentData = await readExclusionsJson();
+        const alreadySaved = currentData.some(app => String(app.uid) === uidStr);
+        const blockResult = await exec(`${NM_BIN} uid add ${uidStr}`);
+        if (!alreadySaved) {
+            currentData.push({ uid: uidStr, label: label, pkg: pkg });
+            const persistResult = await writeExclusionsJson(currentData);
+            if (persistResult.errno !== 0) throw new Error(persistResult.stderr || 'Failed to save exclusion metadata');
         }
 
-        const blockResult = await exec(`${NM_BIN} block ${uidStr}`);
-        if (blockResult.errno !== 0) showToast(translate('blocked_saved'));
-        else showToast(alreadyBlocked ? translate('blocked_already') : translate('blocked', { name }));
+        if (alreadySaved) showToast(translate('blocked_already'));
+        else if (blockResult.errno !== 0) showToast(translate('blocked_saved'));
+        else showToast(translate('blocked', { name: label }));
     } catch { showToast(translate('error_blocking')); }
+
     await loadExclusions();
 }
+
+
+// Hookless Self-Test
+let selftestRun = null;
 
 function getSelftestElements() {
     return {
@@ -922,42 +1314,214 @@ async function startSelftest(button, available) {
 }
 
 // Options
+let optionsInitialized = false;
 async function loadOptions() {
-    const swVerbose = document.querySelector('#setting-verbose input'),
-          swSafe = document.querySelector('#setting-safemode input'),
-          btnClear = document.getElementById('btn-clear-rules'),
-          btnSelftest = document.getElementById('btn-run-selftest');
+    if (!optionsInitialized) initOptionsUI();
 
-    if (swVerbose) { 
+    const swVerbose = document.querySelector('#setting-verbose input');
+    const swSafe = document.querySelector('#setting-safemode input');
+
+    if (swVerbose)
         swVerbose.checked = (await exec(`[ -f ${FILES.verbose} ] && echo yes`)).stdout.includes('yes');
-        swVerbose.onchange = e => exec(e.target.checked ? `touch ${FILES.verbose}` : `rm ${FILES.verbose}`);
-    }
 
-    if (swSafe) {
+    if (swSafe)
         swSafe.checked = (await exec(`[ -f ${FILES.disable} ] && echo yes`)).stdout.includes('yes');
-        swSafe.onchange = e => exec(e.target.checked ? `touch ${FILES.disable}` : `rm ${FILES.disable}`);
+
+    const btnSelftest = document.getElementById('btn-run-selftest');
+    if (btnSelftest) {
+        const available = (await exec(`[ -x ${SELFTEST_BIN} ] && echo yes`)).stdout.includes('yes');
+        btnSelftest.disabled = !available || !!selftestRun?.running;
+        btnSelftest.onclick = () => startSelftest(btnSelftest, available);
+    }
+}
+
+function initOptionsUI() {
+    optionsInitialized = true;
+    renderThemePicker();
+
+    const swMat = document.querySelector('#setting-material input');
+    const customColCard = document.getElementById('custom-color-card');
+    const colorIndicator = document.getElementById('custom-color-indicator');
+    const dialogPresets = document.getElementById('dialog-color-presets');
+    const dialogAdv = document.getElementById('dialog-adv-color');
+
+    if (swMat && customColCard && colorIndicator) {
+        const matCard = swMat.closest('.segment-card');
+        const updateAppearanceCards = () => {
+            customColCard.style.display = isMaterial ? 'none' : ''; 
+            if (matCard) {
+                matCard.style.borderEndStartRadius = isMaterial ? 'var(--nm-segment-outer-corner)' : '';
+                matCard.style.borderEndEndRadius = isMaterial ? 'var(--nm-segment-outer-corner)' : '';
+            }
+        };
+
+        swMat.checked = isMaterial;
+        colorIndicator.style.backgroundColor = customColor;
+        updateAppearanceCards();
+
+        swMat.onchange = (e) => {
+            isMaterial = e.target.checked;
+            localStorage.setItem('nm_material', isMaterial);
+            updateAppearanceCards();
+            applyAppearance();
+            syncThemeToDisk();
+        };
+
+        let originalColor = customColor;
+        let isAdvOpen = false;
+
+        const renderPresets = () => {
+            const grid = document.getElementById('color-presets-grid');
+            grid.replaceChildren();
+            const PALETTE = ['#ba1a1a', '#e86d28', '#d6b007', '#4c6b1f', '#006874', '#0061a4', '#3f5aa6', '#9a25ae'];
+            PALETTE.forEach(c => {
+                const btn = document.createElement('div');
+                btn.className = `preset-swatch ${c === customColor ? 'selected' : ''}`;
+                btn.style.backgroundColor = c;
+                btn.onclick = () => {
+                    customColor = c;
+                    originalColor = c;
+                    localStorage.setItem('nm_custom_color', customColor);
+                    applyAppearance();
+                    renderPresets();
+                    colorIndicator.style.backgroundColor = customColor;
+                    syncThemeToDisk();
+                };
+                grid.appendChild(btn);
+            });
+        };
+
+        const initAdvancedPicker = () => {
+            const { h, s, l } = hexToHSL(customColor);
+            const hInp = document.getElementById('adv-slider-h'),
+                  sInp = document.getElementById('adv-slider-s'),
+                  lInp = document.getElementById('adv-slider-l');
+            const preview = document.getElementById('adv-color-preview');
+            const hexInp = document.getElementById('adv-hex-input');
+
+            hInp.value = h;
+            sInp.value = s;
+            lInp.value = l;
+
+            let isTypingHex = false;
+            const updateLive = () => {
+                const hex = hslToHex(hInp.value, sInp.value, lInp.value);
+                preview.style.backgroundColor = hex;
+                customColor = hex; 
+                applyAppearance();
+                if (!isTypingHex && hexInp)
+                    hexInp.value = hex.substring(1).toUpperCase();
+            };
+
+            hInp.oninput = updateLive;
+            sInp.oninput = updateLive;
+            lInp.oninput = updateLive;
+            
+            // Hex Input Logic
+            if (hexInp) {
+                hexInp.oninput = (e) => {
+                    isTypingHex = true;
+                    let val = e.target.value.replace(/[^0-9A-Fa-f]/g, '');
+                    let parsedHex = null;
+                    if (val.length === 6)
+                        parsedHex = '#' + val;
+                    else if (val.length === 3)
+                        parsedHex = '#' + val[0] + val[0] + val[1] + val[1] + val[2] + val[2];
+
+                    if (parsedHex) {
+                        const newHsl = hexToHSL(parsedHex);
+                        hInp.value = newHsl.h;
+                        sInp.value = newHsl.s;
+                        lInp.value = newHsl.l;
+                        preview.style.backgroundColor = parsedHex;
+                        customColor = parsedHex;
+                        applyAppearance();
+                    }
+                    isTypingHex = false;
+                };
+
+                hexInp.onblur = () => {
+                    let val = hexInp.value.replace(/[^0-9A-Fa-f]/g, '');
+                    if (val.length === 3)
+                        val = val[0] + val[0] + val[1] + val[1] + val[2] + val[2];
+                    if (val.length !== 6) {
+                        val = customColor.substring(1);
+                    }
+                    hexInp.value = val.toUpperCase();
+                };
+            }
+
+            updateLive();
+        };
+        customColCard.onclick = () => {
+            originalColor = customColor;
+            history.pushState({ dialog: 'colorPresets' }, '');
+            dialogPresets.classList.add('show');
+            renderPresets();
+        };
+
+
+        nmDialogClosers.presets = () => { dialogPresets.classList.remove('show'); };
+        nmDialogClosers.advanced = () => {
+            if (!isAdvOpen) return;
+            dialogAdv.classList.remove('show');
+            isAdvOpen = false;
+            customColor = originalColor;
+            applyAppearance();
+            renderPresets();
+        };
+
+        customColCard.onclick = () => {
+            originalColor = customColor;
+            nmPush({ level: 1, dialog: 'colorPresets' });
+            dialogPresets.classList.add('show');
+            renderPresets();
+        };
+
+        document.getElementById('btn-color-presets-close').onclick = () => history.back();
+        document.getElementById('btn-adv-color-open').onclick = () => {
+            isAdvOpen = true;
+            nmPush({ level: 1, dialog: 'advancedColor' });
+            dialogAdv.classList.add('show');
+            initAdvancedPicker();
+        };
+        document.getElementById('btn-adv-color-cancel').onclick = () => history.back();
+        document.getElementById('btn-adv-color-accept').onclick = () => {
+            originalColor = customColor;
+            localStorage.setItem('nm_custom_color', customColor);
+            colorIndicator.style.backgroundColor = customColor;
+            history.back();
+            syncThemeToDisk();
+        };
     }
 
-    if (btnClear) {
-        btnClear.onclick = async () => {
-            showToast(translate('clear_rules_toast'));
+    const swVerbose = document.querySelector('#setting-verbose input');
+    const swSafe = document.querySelector('#setting-safemode input');
+    const btnClearAll = document.getElementById('btn-clear-all');
+
+    if (swVerbose)
+        swVerbose.onchange = e => exec(e.target.checked ? `touch ${FILES.verbose}` : `rm ${FILES.verbose}`);
+
+    if (swSafe)
+        swSafe.onchange = e => exec(e.target.checked ? `touch ${FILES.disable}` : `rm ${FILES.disable}`);
+
+    // The kernel only exposes a single global clear, so the rules and the
+    // excluded UIDs are always dropped together.
+    if (btnClearAll) {
+        btnClearAll.onclick = async () => {
+            showToast(translate('clear_all_toast'));
             try {
-                const persistResult = await exec(buildWriteUidListCmd([]));
-                if (persistResult.errno !== 0) throw new Error(persistResult.stderr || 'Failed to clear exclusions');
-                const clearResult = await exec(`${NM_BIN} clear`);
+                const persistResult = await writeExclusionsJson([]); 
+                if (persistResult.errno !== 0) throw new Error(persistResult.stderr || 'Failed to clear exclusions cache');
+                const clearResult = await exec(`${NM_BIN} clear all`);
                 if (clearResult.errno !== 0) throw new Error(clearResult.stderr || 'Failed to clear runtime rules');
-                showToast(translate('clear_rules_done'));
+                showToast(translate('clear_all_done'));
                 loadModules();
                 loadExclusions();
             } catch { showToast(translate('save_failed')); }
         };
     }
 
-    if (btnSelftest) {
-        const available = (await exec(`[ -x ${SELFTEST_BIN} ] && echo yes`)).stdout.includes('yes');
-        btnSelftest.disabled = !available || !!selftestRun?.running;
-        btnSelftest.onclick = () => startSelftest(btnSelftest, available);
-    }
 }
 
 let isGlobalLoading = false;
@@ -1033,8 +1597,75 @@ async function refreshCurrentView() {
     else if (id === 'view-options') await loadOptions();
 }
 
+let nmUidModalResolver = null;
+let nmUidModalPendingValue = null;
+
+function closeUidModalFromHistory() {
+    const modal = document.getElementById('uid-input-modal');
+    if (!modal?.classList.contains('active')) return;
+    modal.classList.remove('active');
+    document.getElementById('manual-uid-input')?.blur();
+    const resolve = nmUidModalResolver;
+    const value = nmUidModalPendingValue;
+    nmUidModalResolver = null;
+    nmUidModalPendingValue = null;
+    resolve?.(value);
+}
+
+function getManualUid() {
+    return new Promise(resolve => {
+        nmUidModalResolver = resolve;
+        nmUidModalPendingValue = null;
+        const modalDialog = document.getElementById('uid-input-modal');
+        const input = document.getElementById('manual-uid-input');
+        const btnCancel = document.getElementById('btn-cancel-uid');
+        const btnAdd = document.getElementById('btn-confirm-uid');
+        modalDialog.classList.add('active');
+        input.value = '';
+        setTimeout(() => input.focus(), 150);
+        nmPush({ level: 3 });
+        btnCancel.onclick = () => history.back();
+        btnAdd.onclick = () => { nmUidModalPendingValue = input.value; history.back(); };
+        modalDialog.onclick = (e) => { if (e.target === modalDialog) history.back(); };
+    });
+}
+
 function initDelegationAndAttach() {
-     document.getElementById('modules-list')?.addEventListener('change', (e) => {
+    const updateModuleCardDOM = async (card, modId) => {
+        const { stdout } = await exec(`${NM_BIN} rule list --json 2>/dev/null`);
+        const activeRules = JSON.parse(stdout.trim() || "[]");
+        let newFileCount = 0;
+        activeRules.forEach(r => { if (r?.real?.startsWith(`${MOD_DIR}/${modId}/`)) newFileCount++; });
+        const nowLoaded = newFileCount > 0;
+        const toggleChecked = card.querySelector('.switch-input').checked;
+        const hasSkipMount = card.querySelector('.btn-skip-action')?.classList.contains('unskip');
+        const statusKey = nowLoaded ? ((!toggleChecked || hasSkipMount) ? 'status_loaded' : 'status_active') : (!toggleChecked ? 'status_disabled' : (hasSkipMount ? 'status_skipped' : 'status_inactive'));
+
+        const filesChip = card.querySelector('.files-chip');
+        if (newFileCount > 0) {
+            filesChip.style.display = '';
+            card.querySelector('.files-count-text').textContent = translate('modules_injected_files', { count: newFileCount });
+        } else {
+            filesChip.style.display = 'none';
+        }
+
+        const statusChip = card.querySelector('.status-chip');
+        statusChip.textContent = translate(statusKey);
+        statusChip.className = `status-chip md-chip status-${statusKey.replace('status_', '')}`;
+
+        const hotBtn = card.querySelector('.btn-hot-action');
+        const btnSpan = hotBtn.querySelector('span');
+
+        if (nowLoaded) {
+            hotBtn.classList.add('unload');
+            btnSpan.textContent = translate('modules_hot_unload');
+        } else {
+            hotBtn.classList.remove('unload');
+            btnSpan.textContent = translate('modules_hot_load');
+        }
+    };
+
+    document.getElementById('modules-list')?.addEventListener('change', (e) => {
         const toggle = e.target.closest('.switch-input');
         if (toggle) {
             const labelContainer = toggle.closest('.custom-switch');
@@ -1042,19 +1673,24 @@ function initDelegationAndAttach() {
                 e.preventDefault();
                 return;
             }
-            const modId = toggle.closest('.module-card').dataset.moduleId;
+            const card = toggle.closest('.module-card');
+            const modId = card.dataset.moduleId;
             labelContainer.dataset.busy = 'true';
             labelContainer.classList.add('switch-busy');
             const isChecked = toggle.checked;
+
             setTimeout(async () => {
                 try {
                     if (isChecked) { await exec(`rm ${MOD_DIR}/${modId}/disable`); await loadModule(modId); }
                     else { await unloadModule(modId); await exec(`touch ${MOD_DIR}/${modId}/disable`); }
+                    await updateModuleCardDOM(card, modId);
+                } catch (err) {
+                    showToast(`Error: ${err.message}`);
+                    toggle.checked = !isChecked;
                 } finally {
-                    await new Promise(r => setTimeout(r, 200));
                     labelContainer.classList.remove('switch-busy');
                     delete labelContainer.dataset.busy;
-                    loadModules();
+                    loadHome();
                 }
             }, 0);
         }
@@ -1067,12 +1703,50 @@ function initDelegationAndAttach() {
             const card = hotBtn.closest('.module-card');
             const modId = card.dataset.moduleId;
             const isLoaded = hotBtn.classList.contains('unload');
+            const btnSpan = hotBtn.querySelector('span');
+            const originalText = btnSpan.textContent;
+            btnSpan.textContent = translate('loading') || '...';
+
             setTimeout(async () => {
-                try { isLoaded ? await unloadModule(modId) : await loadModule(modId); } 
-                finally { loadModules(); }
+                try {
+                    isLoaded ? await unloadModule(modId) : await loadModule(modId);
+                    await updateModuleCardDOM(card, modId);
+                }
+                catch (err) {
+                    showToast(`Error: ${err.message}`);
+                    btnSpan.textContent = originalText;
+                }
+                finally {
+                    hotBtn.disabled = false;
+                    loadHome();
+                }
             }, 0);
         }
     });
+
+    document.getElementById('modules-list')?.addEventListener('click', (e) => {
+    const skipBtn = e.target.closest('.btn-skip-action');
+    if (skipBtn && !skipBtn.disabled) {
+        skipBtn.disabled = true;
+        const card = skipBtn.closest('.module-card');
+        const modId = card.dataset.moduleId;
+        const wasSkipped = skipBtn.classList.contains('unskip');
+        const skipFile = `${MOD_DIR}/${modId}/skip_mount`;
+
+        setTimeout(async () => {
+            try {
+                await exec(wasSkipped ? `rm -f ${skipFile}` : `touch ${skipFile}`);
+                skipBtn.classList.toggle('unskip', !wasSkipped);
+                skipBtn.querySelector('span').textContent = translate(!wasSkipped ? 'modules_unskip' : 'modules_skip');
+                await updateModuleCardDOM(card, modId);
+            } catch (err) {
+                showToast(`Error: ${err.message}`);
+            } finally {
+                skipBtn.disabled = false;
+            }
+        }, 0);
+    }
+});
 
     document.getElementById('exclusions-list')?.addEventListener('click', (e) => {
         const delBtn = e.target.closest('.btn-delete');
@@ -1083,30 +1757,122 @@ function initDelegationAndAttach() {
             item.style.opacity = '0.5';
             item.style.pointerEvents = 'none';
             setTimeout(() => {
-                removeExclusion(uid, label);
+                removeExclusion(uid, label, item);
             }, 0);
         }
     });
 
-    document.getElementById('app-list-container')?.addEventListener('click', (e) => {
+    let pressTimer, touchMoved = false;
+    const exitMultiSelectMode = window.exitMultiSelectMode = () => {
+        isMultiSelectMode = false;
+        selectedAppsMap.clear();
+        document.querySelectorAll('.app-item.selected').forEach(el => el.classList.remove('selected'));
+        const fab = document.getElementById('modal-fab-action');
+        if (fab) {
+            fab.classList.remove('mode-check');
+            const icon = fab.querySelector('md-icon');
+            if (icon) {
+                icon.innerHTML = ''; 
+                icon.dataset.iconVariant = 'force_redraw'; 
+                setIcon(icon, 'edit', 'outline');
+            }
+        }
+    };
+
+    const toggleAppSelection = (item) => {
+        const uid = item.dataset.uid;
+        if (selectedAppsMap.has(uid)) {
+            selectedAppsMap.delete(uid);
+            item.classList.remove('selected');
+            if (selectedAppsMap.size === 0) exitMultiSelectMode();
+        } else {
+            selectedAppsMap.set(uid, { uid, label: item.dataset.label, pkg: item.dataset.pkg });
+            item.classList.add('selected');
+        }
+    };
+
+    const container = document.getElementById('app-list-container');
+    container?.addEventListener('touchstart', (e) => {
+        touchMoved = false;
         const item = e.target.closest('.app-item');
-        if (item && !item.dataset.busy) {
+        if (!item || item.dataset.busy) return;
+        pressTimer = setTimeout(() => {
+            if (!isMultiSelectMode) {
+                if (navigator.vibrate) navigator.vibrate(50);
+                isMultiSelectMode = true;
+                const fab = document.getElementById('modal-fab-action');
+                if (fab) {
+                    fab.classList.add('mode-check');
+                    const icon = fab.querySelector('md-icon');
+                    if (icon) {
+                        icon.innerHTML = ''; 
+                        icon.dataset.iconVariant = 'force_redraw';
+                        setIcon(icon, 'check', 'outline');
+                    }
+                }
+                toggleAppSelection(item);
+            }
+        }, 500);
+    }, { passive: true });
+
+    container?.addEventListener('touchmove', () => { touchMoved = true; clearTimeout(pressTimer); }, { passive: true });
+    container?.addEventListener('touchend', () => clearTimeout(pressTimer));
+    container?.addEventListener('click', (e) => {
+        const item = e.target.closest('.app-item');
+        if (!item || item.dataset.busy || touchMoved) return;
+
+        if (isMultiSelectMode) {
+            toggleAppSelection(item);
+        } else {
             item.dataset.busy = 'true';
-            const uid = item.dataset.uid;
-            const label = item.dataset.label;
-            if (listObserver) listObserver.disconnect();
-            document.getElementById('app-selector-modal')?.classList.remove('active');
-            setTimeout(async () => {
-                await addExclusion(uid, label);
-            }, 50);
+            const { uid, label, pkg } = item.dataset;
+            closeAppSelector();
+            setTimeout(async () => { await addExclusion(uid, label, pkg); }, 50);
+        }
+    });
+
+    document.getElementById('modal-fab-action')?.addEventListener('click', async () => {
+        if (isMultiSelectMode) {
+            const appsToSave = new Map(selectedAppsMap);
+            exitMultiSelectMode();
+            closeAppSelector();
+            if (appsToSave.size > 0) {
+                try {
+                    const currentData = await readExclusionsJson();
+                    const existingUids = new Set(currentData.map(a => String(a.uid)));
+                    let uidsBash = [];
+                    appsToSave.forEach((app, uid) => {
+                        if (!existingUids.has(uid)) currentData.push(app);
+                        uidsBash.push(uid);
+                    });
+
+                    await writeExclusionsJson(currentData);
+                    await exec(`${NM_BIN} uid add ${uidsBash.join(' ')}`);
+                    showToast(`${appsToSave.size} apps added`);
+                } catch { showToast(translate('error_blocking') || 'Error'); }
+                await loadExclusions();
+            }
+        } else {
+            const manualUid = await getManualUid();
+            if (manualUid && /^\d+$/.test(manualUid.trim())) {
+                closeAppSelector();
+                await addExclusion(manualUid.trim(), `UID: ${manualUid.trim()}`, 'System/Manual');
+            } else if (manualUid) {
+                showToast(translate('invalid_uid') || 'Invalid UID format');
+            }
         }
     });
 
     document.getElementById('app-selector-modal')?.addEventListener('click', (e) => {
         if (e.target === e.currentTarget) {
-            e.currentTarget.classList.remove('active');
-            if (listObserver) listObserver.disconnect(); 
+            closeAppSelector();
+            exitMultiSelectMode();
         }
+    });
+
+    document.getElementById('btn-close-modal')?.addEventListener('click', () => {
+        closeAppSelector();
+        exitMultiSelectMode();
     });
 
     document.getElementById('fab-add-exclusion')?.addEventListener('click', openAppSelector);
@@ -1142,16 +1908,21 @@ function initScrollListener() {
 
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
-    await setAppLocale((localStorage.getItem('nm_locale') || navigator.language || 'en').split('-')[0]);
+    await setAppLocale((localStorage.getItem('nm_locale') || navigator.language || 'en').split('-')[0], false);
     applyIcons();
-    syncSystemBarTheme();
     initNavigation();
     initDelegationAndAttach();
     initScrollListener();
     updateTopAppBar();
     viewLoadState['view-home'] = true;
     loadHome();
+    restoreThemeFromDisk();
     document.body.classList.remove('loading');
+    if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => ensureAppsCache(true));
+    } else {
+        setTimeout(() => ensureAppsCache(true), 200);
+    }
 
     try {
         if (!viewLoadState['view-modules']) loadModules();

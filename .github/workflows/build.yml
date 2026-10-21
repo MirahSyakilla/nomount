@@ -6,17 +6,27 @@ on:
       - nomount-ksun-hookless
     paths-ignore:
       - '**.md'
+      - '**.git*'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  prepare-module:
     runs-on: ubuntu-latest
+    outputs:
+      artifact-name: ${{ steps.pack.outputs.artifact-name }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
 
       - name: Setup zig
-        uses: mlugg/setup-zig@v2.2.1
+        uses: jetsung/setup-zig@v0.0.4
         with:
           version: master
 
@@ -28,39 +38,123 @@ jobs:
           cp ELFkickers-3.2/sstrip/sstrip .
           chmod +x ./sstrip
 
-      - name: compile via zigcc
+      - name: compile nm via zigcc
         run: |
           mkdir bin
           cd userspace/src
-          zig cc -target aarch64-linux -Oz -static -nostdlib -ffreestanding -fno-unwind-tables \
+          zig cc -target aarch64-linux -Oz -mcmodel=tiny -static -nostdlib -ffreestanding -fno-unwind-tables \
             -fno-ident -Wno-invalid-noreturn -Wl,--entry=_start nm.c -o ../../bin/nm-arm64
 
-          zig cc -target arm-linux -Oz -static -nostdlib -ffreestanding -fno-unwind-tables \
-            -fno-ident -Wno-invalid-noreturn -Wl,--entry=_start nm.c -o ../../bin/nm-arm
+          zig cc -target arm-linux -Oz -static -nostdlib -ffreestanding -fno-unwind-tables -fno-ident -Wno-invalid-noreturn \
+            -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--entry=_start nm.c -o ../../bin/nm-arm
 
           cd ../../bin
-          wc -c nm-*
           ../sstrip -z nm-arm64
           ../sstrip -z nm-arm
+
           wc -c nm-*
           file nm-*
           mkdir -p ../module/bin
           mv nm-* ../module/bin/
 
-      - name: Update version code
-        run: sed -i 's/^versionCode=.*/versionCode=${{ github.run_number }}/' module/module.prop
-
-      - name: Extract module metadata
+      - name: Process versioning and metadata
         run: |
+          SHORT_HASH=$(git rev-parse --short HEAD)
+          COMMIT_COUNT=$(git rev-list --count HEAD)
           NAME=$(sed -n 's/^name=//p' module/module.prop | tr -d '\r' | tr -d ' ')
-          VERSION=$(sed -n 's/^version=//p' module/module.prop | tr -d '\r' | tr -d ' ')
-          SHORT_HASH=$(echo "${{ github.sha }}" | cut -c1-7)
-          echo "MODULE_NAME=$NAME" >> $GITHUB_ENV
-          echo "MODULE_VERSION=$VERSION" >> $GITHUB_ENV
-          echo "COMMIT_HASH=$SHORT_HASH" >> $GITHUB_ENV
+          BASE_VERSION=$(sed -n 's/^version=//p' module/module.prop | tr -d '\r' | tr -d ' ')
+
+          sed -i "s/^versionCode=.*/versionCode=${COMMIT_COUNT}/" module/module.prop
+          if [ "${{ github.ref }}" != "refs/heads/nomount-ksun-hookless" ]; then
+            sed -i "s/^version=\(.*\)/version=\1 \(${COMMIT_COUNT}-${SHORT_HASH}-dev\)/" module/module.prop
+            echo "ARTIFACT_NAME=${NAME}-${BASE_VERSION}-dev-${SHORT_HASH}-${COMMIT_COUNT}" >> $GITHUB_ENV
+          else
+            sed -i "s/^version=\(.*\)/version=\1 \(${COMMIT_COUNT}-${SHORT_HASH}\)/" module/module.prop
+            echo "ARTIFACT_NAME=${NAME}-${BASE_VERSION}-release-${SHORT_HASH}-${COMMIT_COUNT}" >> $GITHUB_ENV
+          fi
+
+      - name: Optimize release module (via standalone esbuild)
+        run: |
+          MODULE_BUILD="$RUNNER_TEMP/nomount-module-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          WEBUI_BUILD="$RUNNER_TEMP/nomount-webui-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+
+          cp -a module "$MODULE_BUILD"
+          for f in "$MODULE_BUILD"/webroot/locales/*.json; do jq -c . "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
+          mkdir -p "$WEBUI_BUILD"
+
+          curl -sL "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.28.1.tgz" -o /tmp/esbuild.tgz
+          tar -xzf /tmp/esbuild.tgz -C /tmp && mv /tmp/package/bin/esbuild /tmp/esbuild && chmod +x /tmp/esbuild
+          /tmp/esbuild module/webroot/index.js --bundle --format=esm --minify --outfile="$WEBUI_BUILD/index.js"
+          /tmp/esbuild module/webroot/styles.css --minify --outfile="$WEBUI_BUILD/styles.css"
+          tr '\n' ' ' < module/webroot/index.html | sed 's/  */ /g' | sed 's/> </></g' > "$WEBUI_BUILD/index.html"
+
+          install -m 0644 "$WEBUI_BUILD/index.js" "$MODULE_BUILD/webroot/index.js"
+          install -m 0644 "$WEBUI_BUILD/styles.css" "$MODULE_BUILD/webroot/styles.css"
+          install -m 0644 "$WEBUI_BUILD/index.html" "$MODULE_BUILD/webroot/index.html"
+
+      - name: Pack prepared module
+        id: pack
+        run: |
+          MODULE_BUILD="$RUNNER_TEMP/nomount-module-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          tar -cf "$RUNNER_TEMP/module-base.tar" -C "$MODULE_BUILD" .
+          echo "artifact-name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload prepared module
+        uses: actions/upload-artifact@v7
+        with:
+          name: module-base
+          path: ${{ runner.temp }}/module-base.tar
+
+  build-module:
+    needs: [prepare-module]
+    runs-on: ubuntu-latest
+    env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+
+    steps:
+      - name: Checkout repo
+        if: env.BOT_TOKEN != '' && env.CHAT_ID != ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download prepared module
+        uses: actions/download-artifact@v7
+        with:
+          name: module-base
+          path: ${{ runner.temp }}
+
+      - name: Unpack prepared module
+        run: |
+          MODULE_BUILD="$RUNNER_TEMP/nomount-module-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$MODULE_BUILD"
+          tar -xf "$RUNNER_TEMP/module-base.tar" -C "$MODULE_BUILD"
+
+      - name: Upload to Telegram
+        if: env.BOT_TOKEN != '' && env.CHAT_ID != ''
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TOPIC_ID: ${{ secrets.TOPIC_ID }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          COMMIT_URL: ${{ github.event.head_commit.url }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          MODULE_BUILD="$RUNNER_TEMP/nomount-module-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          export ZIP_PATH="$RUNNER_TEMP/${{ needs.prepare-module.outputs.artifact-name }}.zip"
+
+          echo "Packing module for Telegram..."
+          cd "$MODULE_BUILD"
+          zip -qr9 "$ZIP_PATH" .
+
+          echo "Uploading to Telegram..."
+          cd "$GITHUB_WORKSPACE"
+          python .github/scripts/telegram_upload.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}-${{ github.run_number }}-${{ env.COMMIT_HASH }}
-          path: module/
+          name: ${{ needs.prepare-module.outputs.artifact-name }}
+          path: ${{ runner.temp }}/nomount-module-${{ github.run_id }}-${{ github.run_attempt }}/
