@@ -101,21 +101,41 @@ The subsystem is controlled via the `nm` binary. The CLI uses a simple command s
 | --- | --- |
 | `nm rule add <virtual> <real>` | Inject `real` file at `virtual` path. |
 | `nm rule add --whiteout <virtual>` | Hide the file/directory at `virtual` path. |
-| `nm rule del <virtual>` | Remove a specific injection rule. |
-| `nm uid add <uid>` | Isolate UID. The app will see the stock filesystem. |
-| `nm uid del <uid>` | Remove isolation for UID. |
-| `nm rule list` | Show currently active injection rules. |
-| `nm rule list --json` | Show currently active injection rules in JSON format. |
-| `nm clear all` | Flush all rules and UID blocks immediately. |
+| `nm rule add --opaque <virtual> <real>` | Redirect the directory at `virtual` to `real`; the stock children of `virtual` vanish from lookups while the backend children stay listable. |
+| `nm rule add --uid 10256 <virtual> <real>` | Scope the rule: only UID 10256 sees the redirect; every other UID sees the stock path. |
+| `nm rule add --uid-range 10000 19999 <virtual> <real>` | Scope the rule to a UID range. |
+| `nm rule add --uid-range 10000 19999 --uid-excluded 10318 <virtual> <real>` | Range scoping with a single-UID denial window inside it (~opt-in for everyone except one app). |
+| `nm rule del <virtual>` | Remove a rule. A scoped rule also deletes with `nm rule del --uid 10256 <virtual>`: UID windows and deny windows are part of the rule's identity, and mismatching deletions fail with `ENOENT`. |
+| `nm uid add <uid>` | Add UID to the exclusion list; isolated apps and terminals under that UID always see the stock filesystem. |
+| `nm uid del <uid>` | Remove the UID from the exclusion list. |
+| `nm uid list` / `nm uid list --json` | Show UIDs on the exclusion list. |
+| `nm uid block_isolated [on\|off\|state]` | Toggle bulk blocking of Android isolated-process UIDs (app id `90000`-`99999`) without enumerating them. |
+| `nm rule list` / `nm rule list --json` | Show active rules; scoped rules render as `[UID: a-b excl c]`, JSON adds `uid_start`, `uid_end`, `deny_start`, `deny_end` and `opaque`. |
+| `nm clear all` | Flush all rules and UID entries immediately (destructive, global). |
 | `nm version` | Show the kernel subsystem version. |
 
 The legacy aliases `nm add`, `nm del`, `nm w`, `nm block`, `nm unblock`,
 `nm list` and `nm v` are still accepted.
 
-Commands that upstream offers but the hookless kernel does not implement
-(`nm uid list`, `nm uid clear`, `nm rule clear`, `nm uid block_isolated` and
-per-UID rule scoping via `--uid`) report the feature as unsupported and exit
-with status `4`; the WebUI never offers them.
+### Scoped rules in detail
+
+Two axes compose:
+
+* **Scope window** (`--uid`, `--uid-range`): who the rule applies to. A rule
+  without one is the global fallback and covers every UID outside its deny
+  window. Overlapping scope windows on the same virtual path are rejected
+  with `EEXIST`.
+* **Deny window** (`--uid-excluded`): a single UID carved out of the scope
+  window that must *never* see the rule. A deny window is accepted only
+  inside the scope window (`EINVAL` otherwise); rules with the same scope
+  but different deny windows coexist in the keyring for future
+  configuration, and the effective resolution is accumulated per lookup.
+
+Deletion is exact: the same virtual, real and windows as the add. Behavior
+notes verified against upstream semantics: under an opaque directory rule
+`readdir` lists the backend children while lookups of non-rule children
+return negative entries, so `ls` shows the injection while `stat`/`open` on
+stock children correctly reports "no such file".
 
 ### Examples
 
@@ -152,7 +172,12 @@ version probing, malformed-request rejection, canonical paths, live rule
 replacement, visible inode/device identity, virtual `d_path`, directory and
 symlink redirects, system-directory injection, UID isolation, synthetic
 ancestor cleanup, whiteouts, rule listing, and repeated add/delete lifecycle
-handling. The destructive global `clear` command is deliberately excluded.
+handling — plus, on a v16 keyring, the ABI-16 surfaces: the UID exclusion
+list roundtrip, UID-scoped rules staying invisible to out-of-scope lookups,
+deny-window rules making their way into the JSON render with
+`uid_start`/`uid_end`/`deny_start`/`deny_end`, exact-tuple deletion of
+scoped rules, and opaque directory semantics. The destructive global `clear`
+command is deliberately excluded.
 The WebUI streams each test stage and its result live. The full log is written
 to:
 
