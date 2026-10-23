@@ -21,6 +21,10 @@ V_WHITEOUT=""
 V_CANON=""
 V_DIR=""
 V_STRESS=""
+V_UIDSC=""
+V_OPAQ=""
+V_DENY=""
+UID_TESTED=0
 
 mkdir -p "$NM_DATA" >/dev/null 2>&1
 : > "$LOG_FILE"
@@ -127,6 +131,12 @@ cleanup() {
     [ -n "$V_CANON" ] && "$NM_BIN" del "$V_CANON" >/dev/null 2>&1
     [ -n "$V_DIR" ] && "$NM_BIN" del "$V_DIR" >/dev/null 2>&1
     [ -n "$V_STRESS" ] && "$NM_BIN" del "$V_STRESS" >/dev/null 2>&1
+    [ -n "$V_UIDSC" ] && "$NM_BIN" rule del --uid 5 "$V_UIDSC" >/dev/null 2>&1
+    [ -n "$V_UIDSC" ] && "$NM_BIN" del "$V_UIDSC" >/dev/null 2>&1
+    [ -n "$V_OPAQ" ] && "$NM_BIN" del "$V_OPAQ" >/dev/null 2>&1
+    [ -n "$V_DENY" ] && "$NM_BIN" rule del --uid-range 19 21 --uid-excluded 20 "$V_DENY" >/dev/null 2>&1
+    [ -n "$V_DENY" ] && "$NM_BIN" del "$V_DENY" >/dev/null 2>&1
+    [ "$UID_TESTED" -eq 1 ] && "$NM_BIN" uid del 29999 29998 >/dev/null 2>&1
     rm -rf "$TMPROOT"
 }
 
@@ -367,6 +377,100 @@ fi
 require_whiteout_rule "$V_WHITEOUT" || fail "whiteout rule missing from list json"
 "$NM_BIN" del "$V_WHITEOUT" >/dev/null 2>&1 || fail "failed to delete whiteout rule"
 assert_text "whiteout cleanup restored file" "whiteout-source" "$(cat "$V_WHITEOUT" 2>/dev/null | tr -d '\r\n')"
+
+if [ "$CAN_LIST" -eq 1 ]; then
+    stage "ABI-16: uid exclusion list add/list/del roundtrip"
+    if "$NM_BIN" uid add 29999 29998 >/dev/null 2>&1; then
+        UID_TESTED=1
+        UID_LIST_OUT="$("$NM_BIN" uid list 2>/dev/null)"
+        UID_HAS_9999="$(printf '%s\n' "$UID_LIST_OUT" | grep -Fcx "29999")"
+        UID_HAS_9998="$(printf '%s\n' "$UID_LIST_OUT" | grep -Fcx "29998")"
+        if [ "$UID_HAS_9999" -ge 1 ] && [ "$UID_HAS_9998" -ge 1 ]; then
+            pass "uid list exposes both added entries"
+        else
+            log "EXPECTED: 29999 and 29998 both present"
+            log "ACTUAL:   $(printf '%s' "$UID_LIST_OUT" | tr '\n' ' ')"
+            fail "uid additions did not render"
+        fi
+        "$NM_BIN" uid del 29999 >/dev/null 2>&1 || fail "failed to delete first uid entry"
+        UID_LEFT_9999="$(printf '%s\n' "$("$NM_BIN" uid list 2>/dev/null)" | grep -Fcx "29999")"
+        if [ "$UID_LEFT_9999" -eq 0 ]; then
+            pass "deleted uid entry vanished from the list"
+        else
+            fail "deleted uid entry 29999 remained"
+        fi
+        "$NM_BIN" uid del 29998 >/dev/null 2>&1 || fail "failed to delete second uid entry"
+        UID_TESTED=0
+        pass "uid exclusion list reclaimed cleanly"
+    else
+        skip "uid list commands rejected; CLI packs an older ABI"
+    fi
+
+    stage "ABI-16: uid-scoped rule stays invisible to out-of-scope lookups"
+    V_UIDSC="$TMPROOT/base/scoped-$TAG.txt"
+    if "$NM_BIN" rule add --uid 5 "$V_UIDSC" "$TMPROOT/real/shared.txt" >/dev/null 2>&1; then
+        [ ! -e "$V_UIDSC" ] || fail "uid-5-scoped rule leaked into a root lookup"
+        JSON_SCOPED="$(json_rules | tr -d '\n')"
+        case "$JSON_SCOPED" in *"\"virtual\": \"$V_UIDSC\""*"\"uid_start\": 5"*"\"uid_end\": 5"*)
+                pass "uid-scoped rule renders the exact uid window"
+                ;;
+            *)
+                log "EXPECTED: uid_start 5 / uid_end 5 for $V_UIDSC"
+                log "ACTUAL:   $(printf '%s' "$JSON_SCOPED" | cut -c1-200)"
+                fail "uid-scoped rule render was wrong"
+                ;;
+        esac
+        "$NM_BIN" rule del --uid 5 "$V_UIDSC" >/dev/null 2>&1 ||
+            fail "exact-tuple scoped delete was rejected"
+        [ ! -e "$V_UIDSC" ] || fail "scoped rule remained after exact-tuple delete"
+        V_UIDSC=""
+        pass "uid-scoped rule add/render/delete roundtrip"
+    else
+        skip "scoped rule commands rejected; CLI packed an older ABI"
+    fi
+
+    stage "ABI-16: deny window renders in the uid range and deletes exactly"
+    V_DENY="$TMPROOT/base/deny-$TAG.txt"
+    if "$NM_BIN" rule add --uid-range 19 21 --uid-excluded 20 "$V_DENY" "$TMPROOT/real/shared.txt" >/dev/null 2>&1; then
+        [ ! -e "$V_DENY" ] || fail "rule scoped to uids 19-21 leaked to root lookup"
+        JSON_DENY="$(json_rules | tr -d '\n')"
+        case "$JSON_DENY" in *"\"virtual\": \"$V_DENY\""*"\"uid_start\": 19"*"\"uid_end\": 21"*"\"deny_start\": 20"*"\"deny_end\": 20"*)
+                pass "deny window renders inside its uid range"
+                ;;
+            *)
+                log "EXPECTED: uid range 19-21 with deny 20 for $V_DENY"
+                log "ACTUAL:   $(printf '%s' "$JSON_DENY" | cut -c1-220)"
+                fail "deny window render was wrong"
+                ;;
+        esac
+        "$NM_BIN" rule del --uid-range 19 21 --uid-excluded 20 "$V_DENY" >/dev/null 2>&1 ||
+            fail "exact-tuple deny delete was rejected"
+        [ ! -e "$V_DENY" ] || fail "deny rule remained after exact-tuple delete"
+        V_DENY=""
+        pass "deny window rule add/render/delete roundtrip"
+    else
+        skip "deny-window rule commands rejected; CLI packed an older ABI"
+    fi
+
+    stage "ABI-16: opaque directory lists backend but hides child lookups"
+    V_OPAQ="$TMPROOT/base/opaque-$TAG"
+    mkdir -p "$V_OPAQ" || fail "failed to prepare opaque virtual dir"
+    "$NM_BIN" rule add --opaque "$V_OPAQ" "$TMPROOT/real/directory" >/dev/null 2>&1 ||
+        fail "failed to add opaque dir rule"
+    ls "$V_OPAQ" 2>/dev/null | grep -F child.txt >/dev/null 2>&1 ||
+        fail "opaque dir readdir did not list the backend child"
+    if [ -e "$V_OPAQ/child.txt" ]; then
+        fail "opaque dir leaked child lookup (children must stay negative)"
+    else
+        pass "opaque dir child lookup stayed negative"
+    fi
+    require_rule "$V_OPAQ" || fail "opaque dir rule missing from list json"
+    "$NM_BIN" del "$V_OPAQ" >/dev/null 2>&1 || fail "failed to delete opaque dir rule"
+    V_OPAQ=""
+    pass "opaque directory redirect behaves"
+else
+    skip "ABI-16 stages skipped; rule listing requires NoMount kernel interface v13+"
+fi
 
 stage "repeat rule add, read, and delete to exercise lifecycle reclamation"
 printf 'stress-source\n' > "$V_STRESS" || fail "failed to create stress target"
