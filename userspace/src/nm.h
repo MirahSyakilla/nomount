@@ -111,7 +111,7 @@
 
 /* Kernel ABI the client was built against.  A mismatch is reported instead of
  * silently mis-parsing the command payload. */
-#define NM_KERNEL_ABI_VERSION       15
+#define NM_KERNEL_ABI_VERSION       16
 #define NM_KERNEL_TRANSPORT_VERSION 2
 
 enum {
@@ -123,17 +123,30 @@ enum {
     NM_CMD_ADD_UID = 5,
     NM_CMD_DEL_UID = 6,
     NM_CMD_GET_LIST = 7,
+    NM_CMD_CLEAR_RULES = 8,
+    NM_CMD_CLEAR_UIDS = 9,
+    NM_CMD_GET_UIDS = 10,
+    NM_CMD_BLOCK_ISOLATED = 11,
+    NM_CMD_GET_ISOLATED_STATE = 12,
 };
 
 #define NM_FLAG_IS_DIR   (1U << 1)
 #define NM_FLAG_WHITEOUT (1U << 2)
+#define NM_FLAG_OPAQUE   (1U << 3)
+#define NM_FLAG_MASK     (NM_FLAG_IS_DIR | NM_FLAG_WHITEOUT | NM_FLAG_OPAQUE)
 
 /* Packed payload records, see kernel/nomount/keyring.c.
- *   ADD_RULE: u32 flags | u16 v_len | u16 r_len | vpath | rpath
- *   DEL_RULE: u16 v_len | vpath
- * Paths are length prefixed and never NUL terminated. */
-#define NM_RULE_HDR_SIZE  8
-#define NM_DEL_HDR_SIZE   2
+ *   ADD_RULE: u32 flags | u32 uid_start | u32 uid_end | u32 deny_start |
+ *             u32 deny_end | u16 v_len | u16 r_len | vpath | rpath
+ *   DEL_RULE: u32 uid_start | u32 uid_end | u32 deny_start | u32 deny_end |
+ *             u16 v_len | vpath
+ * Paths are length prefixed and never NUL terminated.  The uid scope is
+ * u32(u32) with the upstream sentinel: uid_start == uid_end == 0 selects the
+ * "all uids" fallback scope (rules match for every uid), while deny_start /
+ * deny_end describe the excluded window that falls back to the original
+ * path. */
+#define NM_RULE_HDR_SIZE  24
+#define NM_DEL_HDR_SIZE   18
 
 #define NM_PAYLOAD_BUFFER_SIZE 8160
 #define NM_OUT_BUF_SIZE        16384
@@ -176,13 +189,17 @@ enum nm_cli_action {
     ACTION_RULE_LIST,
     ACTION_UID_ADD,
     ACTION_UID_DEL,
-    ACTION_CLEAR_ALL,
-    ACTION_VERSION,
-    /* Present in upstream but not implemented by the hookless kernel. */
-    ACTION_RULE_CLEAR,
     ACTION_UID_LIST,
+    ACTION_RULE_CLEAR,
     ACTION_UID_CLEAR,
     ACTION_BLOCK_ISOLATED,
+    ACTION_CLEAR_ALL,
+    ACTION_VERSION,
+};
+
+struct nm_uid_scope {
+    unsigned int start;
+    unsigned int end;
 };
 
 struct nm_args {
@@ -190,9 +207,16 @@ struct nm_args {
     int data_start_idx;
     int is_json;
     int is_whiteout;
+    int is_opaque;
+    /* Rule scope: target window plus the deny window for --uid-excluded. */
+    struct nm_uid_scope uid;
+    struct nm_uid_scope deny;
     int has_uid;
     unsigned int target_uid;
 };
+
+/* Upstream sentinel for the "all uids" fallback scope. */
+#define NM_UID_SCOPE_ALL (struct nm_uid_scope){0, 0}
 
 /* --- UTILS --- */
 #define noinline __attribute__((noinline))

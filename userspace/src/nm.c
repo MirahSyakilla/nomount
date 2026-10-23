@@ -9,8 +9,10 @@
  * initial user namespace.
  *
  * The command numbers below mirror kernel/nomount/nomount.h and the packed
- * payload layout mirrors kernel/nomount/keyring.c.  Rules are global: one
- * rule per virtual path, matched exactly or as a directory prefix.
+ * payload layout mirrors kernel/nomount/keyring.c.  Rules carry a uid scope:
+ * uid_start == uid_end == 0 is the all-uids fallback scope, other pairs
+ * target a specific app-id window, and --uid-excluded adds the deny window
+ * that resolves back to the original path.
  */
 #include "nm.h"
 
@@ -19,6 +21,11 @@ static noinline void parse_arguments(long argc, char **argv, struct nm_args *par
     parsed_args->data_start_idx = 2;
     parsed_args->is_json = 0;
     parsed_args->is_whiteout = 0;
+    parsed_args->is_opaque = 0;
+    parsed_args->uid.start = 0;
+    parsed_args->uid.end = 0;
+    parsed_args->deny.start = 0;
+    parsed_args->deny.end = 0;
     parsed_args->has_uid = 0;
     parsed_args->target_uid = 0;
 
@@ -68,12 +75,6 @@ static noinline int parse_uid(const char *s, unsigned int *out) {
     }
     *out = uid;
     return 0;
-}
-
-static noinline void report_unsupported(const char *feature) {
-    print_literal("nm: ");
-    print_strn(feature, strlen(feature));
-    print_literal(" is not supported by the KernelSU-Next hookless NoMount kernel\n");
 }
 
 static noinline void report_errno(const char *what, int err) {
@@ -170,13 +171,17 @@ static noinline int nm_dump_rules(struct nm_output *out, int is_json) {
         unsigned int size = nm_cmd_payload->data_size;
 
         while (used + NM_RULE_HDR_SIZE <= size) {
-            unsigned int flags = 0;
+            unsigned int flags = 0, uid_start = 0, uid_end = 0, deny_start = 0, deny_end = 0;
             unsigned short v_len = 0, r_len = 0;
             const char *v, *r;
 
             memcpy(&flags, data + used, sizeof(flags));
-            memcpy(&v_len, data + used + 4, sizeof(v_len));
-            memcpy(&r_len, data + used + 6, sizeof(r_len));
+            memcpy(&uid_start, data + used + 4, sizeof(uid_start));
+            memcpy(&uid_end, data + used + 8, sizeof(uid_end));
+            memcpy(&deny_start, data + used + 12, sizeof(deny_start));
+            memcpy(&deny_end, data + used + 16, sizeof(deny_end));
+            memcpy(&v_len, data + used + 20, sizeof(v_len));
+            memcpy(&r_len, data + used + 22, sizeof(r_len));
             used += NM_RULE_HDR_SIZE;
 
             if (used + v_len + r_len > size) break;
@@ -189,7 +194,9 @@ static noinline int nm_dump_rules(struct nm_output *out, int is_json) {
             if (v_len == 0) continue;
 
             int is_whiteout = (flags & NM_FLAG_WHITEOUT) != 0;
+            int is_opaque = (flags & NM_FLAG_OPAQUE) != 0;
             int is_virtual_dir = (flags & NM_FLAG_IS_DIR) != 0;
+            int global_scope = (uid_start == 0 && uid_end == 0);
 
             if (!started) {
                 started = 1;
@@ -209,6 +216,16 @@ static noinline int nm_dump_rules(struct nm_output *out, int is_json) {
                     if (is_virtual_dir)
                         list_print_literal(out, ",\n    \"virtual_dir\": true");
                 }
+                if (is_opaque)
+                    list_print_literal(out, ",\n    \"opaque\": true");
+                list_print_literal(out, ",\n    \"uid_start\": ");
+                list_print_uint(out, uid_start);
+                list_print_literal(out, ",\n    \"uid_end\": ");
+                list_print_uint(out, uid_end);
+                list_print_literal(out, ",\n    \"deny_start\": ");
+                list_print_uint(out, deny_start);
+                list_print_literal(out, ",\n    \"deny_end\": ");
+                list_print_uint(out, deny_end);
                 list_print_literal(out, "\n  }");
             } else {
                 list_print_strn(out, v, v_len);
@@ -219,6 +236,28 @@ static noinline int nm_dump_rules(struct nm_output *out, int is_json) {
                     list_print_strn(out, r, r_len);
                     if (is_virtual_dir)
                         list_print_literal(out, " (virtual dir)");
+                }
+                if (is_opaque)
+                    list_print_literal(out, " (opaque)");
+                list_print_literal(out, " uids=");
+                if (global_scope) {
+                    list_print_literal(out, "all");
+                } else if (uid_start == uid_end) {
+                    list_print_uint(out, uid_start);
+                } else {
+                    list_print_uint(out, uid_start);
+                    list_print_literal(out, "-");
+                    list_print_uint(out, uid_end);
+                }
+                if (deny_start != 0 || deny_end != 0) {
+                    list_print_literal(out, " deny=");
+                    if (deny_start == deny_end) {
+                        list_print_uint(out, deny_start);
+                    } else {
+                        list_print_uint(out, deny_start);
+                        list_print_literal(out, "-");
+                        list_print_uint(out, deny_end);
+                    }
                 }
                 list_print_literal(out, "\n");
             }
@@ -252,12 +291,39 @@ void c_main(long *sp) {
 
     /* Strip the option flags out of the positional argument list. */
     int p_count = 0;
-    int uid_requested = 0;
     if (argc >= 2) {
         for (int i = args.data_start_idx; i < argc; i++) {
             if (strcmp(argv[i], "--uid") == 0) {
-                uid_requested = 1;
-                if (i + 1 < argc) i++;
+                if (i + 1 >= argc || parse_uid(argv[i + 1], &args.uid.start) != 0) {
+                    print_literal("nm: --uid needs a numeric argument\n");
+                    exit_code = NM_EXIT_USAGE;
+                    goto do_exit;
+                }
+                args.uid.end = args.uid.start;
+                i++;
+            } else if (strcmp(argv[i], "--uid-range") == 0) {
+                unsigned int range[2];
+                int k;
+                for (k = 0; k < 2; k++) {
+                    if (i + 1 >= argc || parse_uid(argv[i + 1], &range[k]) != 0) {
+                        print_literal("nm: --uid-range needs START and END\n");
+                        exit_code = NM_EXIT_USAGE;
+                        goto do_exit;
+                    }
+                    i++;
+                }
+                args.uid.start = range[0];
+                args.uid.end = range[1];
+            } else if (strcmp(argv[i], "--uid-excluded") == 0) {
+                if (i + 1 >= argc || parse_uid(argv[i + 1], &args.deny.start) != 0) {
+                    print_literal("nm: --uid-excluded needs a numeric argument\n");
+                    exit_code = NM_EXIT_USAGE;
+                    goto do_exit;
+                }
+                args.deny.end = args.deny.start;
+                i++;
+            } else if (strcmp(argv[i], "--opaque") == 0) {
+                args.is_opaque = 1;
             } else if (strcmp(argv[i], "--json") == 0) {
                 args.is_json = 1;
             } else if ((args.action == ACTION_RULE_LIST || args.action == ACTION_UID_LIST) &&
@@ -271,32 +337,135 @@ void c_main(long *sp) {
         }
     }
 
-    if (uid_requested) {
-        report_unsupported("per-UID rule scoping");
-        exit_code = NM_EXIT_UNSUP;
+    if (args.is_opaque && args.is_whiteout) {
+        print_literal("nm: --opaque and --whiteout are mutually exclusive\n");
+        exit_code = NM_EXIT_USAGE;
         goto do_exit;
     }
 
     switch (args.action) {
+        case ACTION_BLOCK_ISOLATED: {
+            int mode = -1;
+            if (p_count == 0) {
+                mode = 2;
+            } else if (p_count == 1) {
+                if (strcmp(argv[0], "on") == 0) mode = 1;
+                else if (strcmp(argv[0], "off") == 0) mode = 0;
+                else if (strcmp(argv[0], "state") == 0) mode = 2;
+            }
+            if (mode < 0) {
+                print_literal("usage: nm uid block_isolated [on|off|state]\n");
+                exit_code = NM_EXIT_USAGE;
+                goto do_exit;
+            }
+            if (nm_check_kernel(&version) < 0) {
+                exit_code = NM_EXIT_KERNEL;
+                goto do_exit;
+            }
+            if (mode == 2) {
+                nm_cmd_payload->cmd = NM_CMD_GET_ISOLATED_STATE;
+                nm_cmd_payload->target_uid = 0;
+                nm_cmd_payload->arg1 = 0;
+                nm_cmd_payload->data_size = 0;
+                if (nm_send_payload(nm_cmd_payload) < 0) {
+                    exit_code = NM_EXIT_KERNEL;
+                    goto do_exit;
+                }
+                struct nm_output out = { nm_out_buf, 0, NM_OUT_BUF_SIZE };
+                char c = (nm_cmd_payload->data_size >= 1 &&
+                          nm_cmd_payload->buffer[0] == '1') ? '1' : '0';
+                list_print_literal(&out, "block_isolated: ");
+                list_print_strn(&out, &c, 1);
+                list_print_literal(&out, "\n");
+                list_flush(&out);
+            } else {
+                nm_cmd_payload->cmd = NM_CMD_BLOCK_ISOLATED;
+                nm_cmd_payload->target_uid = (mode == 1) ? 1 : 0;
+                nm_cmd_payload->arg1 = 0;
+                nm_cmd_payload->data_size = 0;
+                if (nm_send_payload(nm_cmd_payload) < 0) {
+                    exit_code = NM_EXIT_KERNEL;
+                    goto do_exit;
+                }
+            }
+            goto do_exit;
+        }
+
+        case ACTION_UID_LIST: {
+            if (nm_check_kernel(&version) < 0) {
+                exit_code = NM_EXIT_KERNEL;
+                goto do_exit;
+            }
+            struct nm_output out = { nm_out_buf, 0, NM_OUT_BUF_SIZE };
+            if (args.is_json) list_print_literal(&out, "[\n");
+            int started = 0;
+            unsigned long long cursor = 0;
+            unsigned int pages = 0;
+            unsigned int printed = 0;
+            for (;;) {
+                unsigned int e;
+                nm_cmd_payload->cmd = NM_CMD_GET_UIDS;
+                nm_cmd_payload->arg1 = cursor;
+                nm_cmd_payload->data_size = 0;
+                if (nm_send_payload(nm_cmd_payload) < 0) {
+                    exit_code = NM_EXIT_KERNEL;
+                    goto do_exit;
+                }
+                if (nm_cmd_payload->arg1 == cursor && nm_cmd_payload->arg1 != 0) break;
+                cursor = nm_cmd_payload->arg1;
+                if (pages++ > 512 && cursor != 0) {
+                    exit_code = NM_EXIT_KERNEL;
+                    goto do_exit;
+                }
+                unsigned int size = nm_cmd_payload->data_size;
+                if (size == 0) break;
+                if (size % sizeof(unsigned int) != 0) {
+                    exit_code = NM_EXIT_KERNEL;
+                    goto do_exit;
+                }
+                for (e = 0; e < size; e += sizeof(unsigned int)) {
+                    unsigned int uid_value;
+                    memcpy(&uid_value, nm_cmd_payload->buffer + e, sizeof(uid_value));
+                    if (started && args.is_json)
+                        list_print_literal(&out, ",\n  ");
+                    else if (args.is_json)
+                        list_print_literal(&out, "  ");
+                    else if (started)
+                        list_print_literal(&out, "\n");
+                    started = 1;
+                    printed++;
+                    list_print_uint(&out, uid_value);
+                }
+                if (cursor == 0) break;
+            }
+            if (args.is_json) {
+                if (!started) list_print_literal(&out, "  ");
+                list_print_literal(&out, "\n]\n");
+            } else if (started) {
+                list_print_literal(&out, "\n");
+            }
+            list_flush(&out);
+            (void)printed;
+            goto do_exit;
+        }
+
         case ACTION_RULE_CLEAR:
-            report_unsupported("selective rule clear");
-            exit_code = NM_EXIT_UNSUP;
+        case ACTION_UID_CLEAR: {
+            if (nm_check_kernel(&version) < 0) {
+                exit_code = NM_EXIT_KERNEL;
+                goto do_exit;
+            }
+            nm_cmd_payload->cmd = (args.action == ACTION_RULE_CLEAR) ?
+                                  NM_CMD_CLEAR_RULES : NM_CMD_CLEAR_UIDS;
+            nm_cmd_payload->target_uid = 0;
+            nm_cmd_payload->arg1 = 0;
+            nm_cmd_payload->data_size = 0;
+            if (nm_send_payload(nm_cmd_payload) < 0) {
+                exit_code = NM_EXIT_KERNEL;
+                goto do_exit;
+            }
             goto do_exit;
-
-        case ACTION_UID_LIST:
-            report_unsupported("listing excluded UIDs");
-            exit_code = NM_EXIT_UNSUP;
-            goto do_exit;
-
-        case ACTION_UID_CLEAR:
-            report_unsupported("selective UID clear");
-            exit_code = NM_EXIT_UNSUP;
-            goto do_exit;
-
-        case ACTION_BLOCK_ISOLATED:
-            report_unsupported("blocking isolated UIDs");
-            exit_code = NM_EXIT_UNSUP;
-            goto do_exit;
+        }
 
         default:
             break;
@@ -355,19 +524,28 @@ void c_main(long *sp) {
                 if (pending + record_size > NM_PAYLOAD_BUFFER_SIZE) {
                     nm_cmd_payload->data_size = pending;
                     int res = nm_send_payload(nm_cmd_payload);
-                    if (res < 0) exit_code = NM_EXIT_KERNEL;
+                    if (res < 0) {
+                        report_errno("the command batch", res);
+                        exit_code = NM_EXIT_KERNEL;
+                    }
                     cursor = nm_cmd_payload->buffer;
                     pending = 0;
                 }
 
                 if (target_cmd == NM_CMD_ADD_RULE) {
-                    unsigned int flags = args.is_whiteout ? NM_FLAG_WHITEOUT : 0;
+                    unsigned int flags = args.is_whiteout ?
+                                         NM_FLAG_WHITEOUT : 0;
+                    if (args.is_opaque) flags |= NM_FLAG_OPAQUE;
                     unsigned short v_store = (unsigned short)v_len;
                     unsigned short r_store = (unsigned short)r_len;
 
                     memcpy(cursor, &flags, sizeof(flags));
-                    memcpy(cursor + 4, &v_store, sizeof(v_store));
-                    memcpy(cursor + 6, &r_store, sizeof(r_store));
+                    memcpy(cursor + 4, &args.uid.start, sizeof(args.uid.start));
+                    memcpy(cursor + 8, &args.uid.end, sizeof(args.uid.end));
+                    memcpy(cursor + 12, &args.deny.start, sizeof(args.deny.start));
+                    memcpy(cursor + 16, &args.deny.end, sizeof(args.deny.end));
+                    memcpy(cursor + 20, &v_store, sizeof(v_store));
+                    memcpy(cursor + 22, &r_store, sizeof(r_store));
                     cursor += NM_RULE_HDR_SIZE;
 
                     cursor = resolve_path(cursor, cwd, argv[i]);
@@ -376,7 +554,11 @@ void c_main(long *sp) {
                 } else {
                     unsigned short v_store = (unsigned short)v_len;
 
-                    memcpy(cursor, &v_store, sizeof(v_store));
+                    memcpy(cursor, &args.uid.start, sizeof(args.uid.start));
+                    memcpy(cursor + 4, &args.uid.end, sizeof(args.uid.end));
+                    memcpy(cursor + 8, &args.deny.start, sizeof(args.deny.start));
+                    memcpy(cursor + 12, &args.deny.end, sizeof(args.deny.end));
+                    memcpy(cursor + 16, &v_store, sizeof(v_store));
                     cursor += NM_DEL_HDR_SIZE;
                     cursor = resolve_path(cursor, cwd, argv[i]);
                 }
@@ -387,7 +569,10 @@ void c_main(long *sp) {
             if (pending) {
                 nm_cmd_payload->data_size = pending;
                 int res = nm_send_payload(nm_cmd_payload);
-                if (res < 0) exit_code = NM_EXIT_KERNEL;
+                if (res < 0) {
+                    report_errno("the command batch", res);
+                    exit_code = NM_EXIT_KERNEL;
+                }
             }
             break;
         }
@@ -405,7 +590,10 @@ void c_main(long *sp) {
                 nm_cmd_payload->arg1 = 0;
                 nm_cmd_payload->data_size = 0;
                 int res = nm_send_payload(nm_cmd_payload);
-                if (res < 0) exit_code = NM_EXIT_KERNEL;
+                if (res < 0) {
+                    report_errno("the uid command", res);
+                    exit_code = NM_EXIT_KERNEL;
+                }
             }
             break;
         }
@@ -416,14 +604,20 @@ void c_main(long *sp) {
             nm_cmd_payload->arg1 = 0;
             nm_cmd_payload->data_size = 0;
             int res = nm_send_payload(nm_cmd_payload);
-            if (res < 0) exit_code = NM_EXIT_KERNEL;
+            if (res < 0) {
+                report_errno("the clear-all command", res);
+                exit_code = NM_EXIT_KERNEL;
+            }
             break;
         }
 
         case ACTION_RULE_LIST: {
             struct nm_output out = { nm_out_buf, 0, NM_OUT_BUF_SIZE };
-            if (nm_dump_rules(&out, args.is_json) < 0)
+            int err = nm_dump_rules(&out, args.is_json);
+            if (err < 0) {
+                report_errno("the rule list", err);
                 exit_code = NM_EXIT_KERNEL;
+            }
             break;
         }
 
